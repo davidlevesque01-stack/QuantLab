@@ -187,3 +187,32 @@ This document is authoritative for major architectural decisions and must be upd
 - repository organization;
 - security architecture;
 - collaboration model.
+
+## 13. Work Management with GitHub Projects
+
+QuantLab uses a GitHub Project as the central work-management layer for the platform.
+
+The GitHub Project is used to manage:
+
+- backlog;
+- action items;
+- priorities;
+- ownership;
+- status;
+- target dates;
+- component classification;
+- environment classification.
+
+The standard workflow is:
+
+Backlog → Ready → In Progress → Review / Test → Done
+
+Standard project fields include:
+
+- Priority: Critical / High / Medium / Low
+- Component: Infrastructure / GitHub / Database / Collector / Analytics / Orchestration / Documentation / Collaboration / Security
+- Environment: DEV / TEST / PROD / N/A
+- Target date
+- Owner
+
+GitHub Issues and Pull Requests should be linked to the Project when implementation work, discussion, validation, or code changes are required.
