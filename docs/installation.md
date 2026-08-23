@@ -176,3 +176,47 @@ Résultat de validation :
 - résultats métriques identiques à la baseline V0.6.
 
 La migration du collecteur Nasdaq Halts vers le monorepo est validée.
+
+## 11. Environnement Python du monorepo
+
+Un environnement virtuel Python commun au monorepo QuantLab a été créé sous :
+
+`C:\QuantLab\QuantLab\.venv`
+
+Version Python de référence actuelle :
+
+`Python 3.14.7`
+
+L'environnement est activé sous Windows PowerShell avec :
+
+    .\.venv\Scripts\Activate.ps1
+
+Lorsque l'environnement est actif, la commande :
+
+    where.exe python
+
+doit retourner en premier :
+
+    C:\QuantLab\QuantLab\.venv\Scripts\python.exe
+
+Le répertoire `.venv` est exclu de Git et doit être recréé indépendamment sur chaque poste de développement.
+
+Le collecteur Nasdaq Halts V0.6 utilise actuellement uniquement des modules de la bibliothèque standard Python et ne nécessite aucune dépendance Python externe.
+
+Après création du nouvel environnement virtuel, le moteur V0.6 a été exécuté depuis :
+
+    collectors\nasdaq_halts\src\calculate_halt_metrics.py
+
+Résultat de validation :
+
+- Événements bruts : 744
+- Événements uniques : 744
+- HALT Episodes : 744
+- Tickers différents : 235
+- Lignes quotidiennes : 322
+- Jours de marché : 10
+- Durées calculables : 742
+- QVCG TEST : PASS
+- BCARU TEST : PASS
+
+Le monorepo QuantLab est donc autonome par rapport à l'ancien environnement virtuel situé sous `C:\QuantLab\nasdaq_halts`.
