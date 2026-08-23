@@ -38,10 +38,13 @@ logs/
 *.sqlite
 *.sqlite3
 
-# Local data
-data/raw/
-data/processed/
-data/temp/
+# Local data - all QuantLab components
+**/data/raw/
+**/data/processed/
+**/data/temp/
+
+# Runtime logs
+**/logs/
 
 # OS
 .DS_Store

@@ -138,3 +138,41 @@ Completed milestone:
 Current milestone:
 
 - Configure GitHub Projects
+
+## 10. Migration du collecteur Nasdaq Halts
+
+Le projet historique local :
+
+`C:\QuantLab\nasdaq_halts`
+
+a été conservé intact comme copie de référence pendant la migration.
+
+Le collecteur a été copié vers :
+
+`C:\QuantLab\QuantLab\collectors\nasdaq_halts`
+
+Les éléments suivants ont été migrés :
+
+- code source Python;
+- configuration non sensible;
+- architecture spécifique du collecteur;
+- spécification des métriques.
+
+Les éléments suivants n'ont pas été ajoutés à Git :
+
+- environnement virtuel `.venv`;
+- données RAW;
+- données processed;
+- logs.
+
+Les règles `.gitignore` ont été étendues afin d'exclure les données et logs de tous les composants QuantLab.
+
+Après migration, le moteur V0.6 a été exécuté depuis son nouvel emplacement en utilisant temporairement l'environnement Python historique.
+
+Résultat de validation :
+
+- QVCG : PASS
+- BCARU : PASS
+- résultats métriques identiques à la baseline V0.6.
+
+La migration du collecteur Nasdaq Halts vers le monorepo est validée.

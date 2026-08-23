@@ -1,0 +1,15 @@
+{
+    "nasdaq_rss_base_url": "https://www.nasdaqtrader.com/rss.aspx?feed=tradehalts",
+    "raw_directory": "data/raw/nasdaq",
+    "processed_directory": "data/processed",
+    "log_directory": "logs",
+    "request_timeout_seconds": 30,
+    "user_agent": "QuantLab Nasdaq Halt Collector/1.0",
+    "test_historical_date": "08142026",
+    "test_symbols": [
+        "AKAN",
+        "CAPR",
+        "SXTC",
+        "CGTL"
+    ]
+}
