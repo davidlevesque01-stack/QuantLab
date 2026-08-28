@@ -1,8 +1,19 @@
 import csv
 import json
+
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
-from xml.etree import ElementTree
+
+from collectors.nasdaq_halts.src.nasdaq_xml import parse_xml_bytes
+
+
+# ============================================================
+# QUANTLAB - NASDAQ HALT LIVE COLLECTOR
+# VERSION 0.8
+# ============================================================
+
+VERSION = "0.8"
 
 
 # ============================================================
@@ -12,8 +23,48 @@ from xml.etree import ElementTree
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = PROJECT_ROOT / "config" / "config.json"
 
-with open(CONFIG_FILE, "r", encoding="utf-8") as file:
+with open(
+    CONFIG_FILE,
+    "r",
+    encoding="utf-8"
+) as file:
+
     config = json.load(file)
+
+
+# ============================================================
+# Répertoires
+# ============================================================
+
+raw_directory = (
+    PROJECT_ROOT
+    / config["raw_directory"]
+)
+
+live_raw_directory = (
+    raw_directory
+    / "live"
+)
+
+processed_directory = (
+    PROJECT_ROOT
+    / config["processed_directory"]
+)
+
+raw_directory.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+live_raw_directory.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+processed_directory.mkdir(
+    parents=True,
+    exist_ok=True
+)
 
 
 # ============================================================
@@ -25,13 +76,26 @@ url = config["nasdaq_rss_base_url"]
 request = Request(
     url,
     headers={
-        "User-Agent": config["user_agent"]
+        "User-Agent":
+            config["user_agent"]
     }
 )
 
-print("QuantLab - Nasdaq Halt Collector")
 print()
-print("Téléchargement du flux Nasdaq...")
+print(
+    "============================================================"
+)
+print(
+    f"QUANTLAB - NASDAQ HALT LIVE COLLECTOR V{VERSION}"
+)
+print(
+    "============================================================"
+)
+print()
+
+print(
+    "Téléchargement du flux Nasdaq..."
+)
 
 with urlopen(
     request,
@@ -40,113 +104,137 @@ with urlopen(
 
     xml_data = response.read()
 
-print(f"Flux reçu : {len(xml_data)} octets")
-
-
-# ============================================================
-# Sauvegarde du XML brut
-# ============================================================
-
-raw_directory = (
-    PROJECT_ROOT
-    / config["raw_directory"]
+print(
+    f"Flux reçu : {len(xml_data)} octets"
 )
 
-raw_directory.mkdir(
-    parents=True,
-    exist_ok=True
+
+# ============================================================
+# Snapshot XML immuable
+# ============================================================
+
+collection_timestamp = (
+    datetime.now(
+        timezone.utc
+    )
 )
 
-raw_file = raw_directory / "latest_tradehalts.xml"
+timestamp_text = (
+    collection_timestamp.strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+)
 
-with open(raw_file, "wb") as file:
-    file.write(xml_data)
+snapshot_file = (
+    live_raw_directory
+    / f"tradehalts_live_{timestamp_text}.xml"
+)
 
-print(f"XML brut : {raw_file}")
+with open(
+    snapshot_file,
+    "wb"
+) as file:
+
+    file.write(
+        xml_data
+    )
+
+print(
+    f"Snapshot XML : {snapshot_file}"
+)
 
 
 # ============================================================
-# Analyse du XML
+# Copie latest
 # ============================================================
 
-root = ElementTree.fromstring(xml_data)
+latest_file = (
+    raw_directory
+    / "latest_tradehalts.xml"
+)
 
-namespace = {
-    "ndaq": "http://www.nasdaqtrader.com/"
-}
+with open(
+    latest_file,
+    "wb"
+) as file:
 
-items = root.findall("./channel/item")
+    file.write(
+        xml_data
+    )
+
+print(
+    f"XML latest   : {latest_file}"
+)
+
+
+# ============================================================
+# Parsing normalisé
+# ============================================================
+
+records = parse_xml_bytes(
+    xml_data,
+    snapshot_file.name
+)
 
 print()
-print(f"Nombre d'enregistrements trouvés : {len(items)}")
-
-
-# ============================================================
-# Extraction des données
-# ============================================================
-
-records = []
-
-for item in items:
-
-    def get_value(field):
-        element = item.find(f"ndaq:{field}", namespace)
-
-        if element is None or element.text is None:
-            return ""
-
-        return element.text.strip()
-
-
-    record = {
-        "halt_date": get_value("HaltDate"),
-        "halt_time": get_value("HaltTime"),
-        "symbol": get_value("IssueSymbol"),
-        "issue_name": get_value("IssueName"),
-        "market": get_value("Market"),
-        "reason_code": get_value("ReasonCode"),
-        "pause_threshold_price": get_value(
-            "PauseThresholdPrice"
-        ),
-        "resumption_date": get_value("ResumptionDate"),
-        "resumption_quote_time": get_value(
-            "ResumptionQuoteTime"
-        ),
-        "resumption_trade_time": get_value(
-            "ResumptionTradeTime"
-        )
-    }
-
-    records.append(record)
+print(
+    f"Nombre d'enregistrements trouvés : {len(records)}"
+)
 
 
 # ============================================================
 # Affichage de contrôle
 # ============================================================
 
-print()
-print("Premier enregistrement :")
-print()
+if records:
 
-for key, value in records[0].items():
-    print(f"{key}: {value}")
+    print()
+    print(
+        "Premier enregistrement :"
+    )
+    print()
+
+    first_record = records[0]
+
+    fields_to_display = [
+        "halt_date",
+        "halt_time",
+        "symbol",
+        "issue_name",
+        "market",
+        "reason_code",
+        "pause_threshold_price",
+        "resumption_date",
+        "resumption_quote_time",
+        "resumption_trade_time",
+        "halt_start",
+        "halt_end",
+        "source_file",
+    ]
+
+    for field in fields_to_display:
+
+        print(
+            f"{field}: "
+            f"{first_record[field]}"
+        )
+
+else:
+
+    print()
+    print(
+        "Aucun HALT présent dans le flux."
+    )
 
 
 # ============================================================
-# Export CSV
+# Export CSV live secondaire
 # ============================================================
 
-processed_directory = (
-    PROJECT_ROOT
-    / config["processed_directory"]
+live_csv_file = (
+    processed_directory
+    / "live_tradehalts.csv"
 )
-
-processed_directory.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
-csv_file = processed_directory / "tradehalts.csv"
 
 fieldnames = [
     "halt_date",
@@ -158,11 +246,11 @@ fieldnames = [
     "pause_threshold_price",
     "resumption_date",
     "resumption_quote_time",
-    "resumption_trade_time"
+    "resumption_trade_time",
 ]
 
 with open(
-    csv_file,
+    live_csv_file,
     "w",
     newline="",
     encoding="utf-8-sig"
@@ -170,13 +258,40 @@ with open(
 
     writer = csv.DictWriter(
         file,
-        fieldnames=fieldnames
+        fieldnames=fieldnames,
+        extrasaction="ignore"
     )
 
     writer.writeheader()
-    writer.writerows(records)
 
+    writer.writerows(
+        records
+    )
+
+
+# ============================================================
+# Résultat
+# ============================================================
 
 print()
-print(f"CSV créé : {csv_file}")
-print(f"Enregistrements exportés : {len(records)}")
+print(
+    f"CSV live créé : {live_csv_file}"
+)
+
+print(
+    f"Enregistrements exportés : {len(records)}"
+)
+
+print()
+
+print(
+    "============================================================"
+)
+
+print(
+    f"COLLECTE LIVE V{VERSION} TERMINÉE"
+)
+
+print(
+    "============================================================"
+)

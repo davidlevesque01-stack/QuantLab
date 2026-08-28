@@ -1,12 +1,14 @@
 from pathlib import Path
 import csv
-import xml.etree.ElementTree as ET
 
 from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import median
 
+from collectors.nasdaq_halts.src.nasdaq_xml import parse_xml_file
 from collectors.nasdaq_halts.src.nasdaq_postgresql import persist_nasdaq_halts
+from collectors.nasdaq_halts.src.nasdaq_episodes import build_halt_episodes
+from collectors.nasdaq_halts.src.nasdaq_deduplication import deduplicate_events
 
 
 # ============================================================
@@ -81,140 +83,6 @@ def parse_datetime(date_text, time_text):
             continue
 
     return None
-
-
-def parse_xml_file(xml_file):
-    """
-    Lit un fichier XML Nasdaq et retourne les HALT bruts.
-    """
-
-    tree = ET.parse(xml_file)
-    root = tree.getroot()
-
-    events = []
-
-    for item in root.findall(".//item"):
-
-        symbol = clean(
-            item.findtext(
-                "ndaq:IssueSymbol",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        if not symbol:
-            continue
-
-        issue_name = clean(
-            item.findtext(
-                "ndaq:IssueName",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        market = clean(
-            item.findtext(
-                "ndaq:Mkt",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        reason_code = clean(
-            item.findtext(
-                "ndaq:ReasonCode",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        pause_threshold = clean(
-            item.findtext(
-                "ndaq:PauseThresholdPrice",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        halt_date = clean(
-            item.findtext(
-                "ndaq:HaltDate",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        halt_time = clean(
-            item.findtext(
-                "ndaq:HaltTime",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        resumption_date = clean(
-            item.findtext(
-                "ndaq:ResumptionDate",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        resumption_quote_time = clean(
-            item.findtext(
-                "ndaq:ResumptionQuoteTime",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        resumption_trade_time = clean(
-            item.findtext(
-                "ndaq:ResumptionTradeTime",
-                default="",
-                namespaces=NS
-            )
-        )
-
-        halt_start = parse_datetime(
-            halt_date,
-            halt_time
-        )
-
-        # Priorité à ResumptionTradeTime.
-        #
-        # Le titre est considéré halted jusqu'à la reprise
-        # des transactions.
-
-        resumption_time = resumption_trade_time
-
-        if not resumption_time:
-            resumption_time = resumption_quote_time
-
-        halt_end = parse_datetime(
-            resumption_date,
-            resumption_time
-        )
-
-        events.append({
-            "symbol": symbol,
-            "issue_name": issue_name,
-            "market": market,
-            "reason_code": reason_code,
-            "halt_date": halt_date,
-            "halt_time": halt_time,
-            "resumption_date": resumption_date,
-            "resumption_quote_time": resumption_quote_time,
-            "resumption_trade_time": resumption_trade_time,
-            "pause_threshold_price": pause_threshold,
-            "source_file": xml_file.name,
-            "halt_start": halt_start,
-            "halt_end": halt_end,
-        })
-
-    return events
 
 
 def get_market_days(xml_files):
@@ -320,23 +188,8 @@ print(
 # 2. DÉDUPLICATION
 # ============================================================
 
-unique_events_dict = {}
-
-for event in raw_events:
-
-    key = (
-        event["symbol"],
-        event["halt_start"],
-        event["resumption_date"],
-        event["resumption_trade_time"],
-        event["reason_code"],
-    )
-
-    unique_events_dict[key] = event
-
-
-unique_events = list(
-    unique_events_dict.values()
+unique_events = deduplicate_events(
+    raw_events
 )
 
 print(
@@ -349,195 +202,32 @@ print(
 # 3. CONSTRUCTION DES HALT EPISODES
 # ============================================================
 
-events_by_symbol = defaultdict(list)
+episodes, episode_stats = build_halt_episodes(
+    unique_events,
+    MARKET_CLOSE
+)
 
-for event in unique_events:
+duration_count = episode_stats[
+    "duration_count"
+]
 
-    if event["halt_start"] is not None:
+close_yes = episode_stats[
+    "close_yes"
+]
 
-        events_by_symbol[
-            event["symbol"]
-        ].append(event)
+close_no = episode_stats[
+    "close_no"
+]
 
-
-episodes = []
-
-for symbol, events in events_by_symbol.items():
-
-    events.sort(
-        key=lambda x: x["halt_start"]
-    )
-
-    current = None
-
-    for event in events:
-
-        start = event["halt_start"]
-        end = event["halt_end"]
-
-        # ----------------------------------------------------
-        # Premier événement
-        # ----------------------------------------------------
-
-        if current is None:
-
-            current = {
-                "symbol": symbol,
-                "issue_name":
-                    event["issue_name"],
-                "market":
-                    event["market"],
-                "reason_code":
-                    event["reason_code"],
-                "halt_start":
-                    start,
-                "halt_end":
-                    end,
-                "pause_threshold_price":
-                    event[
-                        "pause_threshold_price"
-                    ],
-            }
-
-            continue
-
-        current_start = current[
-            "halt_start"
-        ]
-
-        current_end = current[
-            "halt_end"
-        ]
-
-        # ----------------------------------------------------
-        # Même épisode :
-        #
-        # - même début
-        # - ou chevauchement
-        # ----------------------------------------------------
-
-        same_episode = False
-
-        if start == current_start:
-
-            same_episode = True
-
-        elif (
-            current_end is not None
-            and start <= current_end
-        ):
-
-            same_episode = True
-
-        if same_episode:
-
-            if start < current_start:
-
-                current[
-                    "halt_start"
-                ] = start
-
-            if end is not None:
-
-                if (
-                    current_end is None
-                    or end > current_end
-                ):
-
-                    current[
-                        "halt_end"
-                    ] = end
-
-        else:
-
-            episodes.append(
-                current
-            )
-
-            current = {
-                "symbol": symbol,
-                "issue_name":
-                    event["issue_name"],
-                "market":
-                    event["market"],
-                "reason_code":
-                    event["reason_code"],
-                "halt_start":
-                    start,
-                "halt_end":
-                    end,
-                "pause_threshold_price":
-                    event[
-                        "pause_threshold_price"
-                    ],
-            }
-
-    if current is not None:
-
-        episodes.append(
-            current
-        )
-
-
-# Identifiant unique d'épisode
-
-for index, episode in enumerate(
-    episodes,
-    start=1
-):
-
-    episode[
-        "episode_id"
-    ] = f"H{index:08d}"
+close_unknown = episode_stats[
+    "close_unknown"
+]
 
 
 print(
     f"HALT Episodes          : "
     f"{len(episodes)}"
 )
-
-
-# ============================================================
-# 4. CALCUL DES DURÉES
-# ============================================================
-
-duration_count = 0
-
-for episode in episodes:
-
-    start = episode[
-        "halt_start"
-    ]
-
-    end = episode[
-        "halt_end"
-    ]
-
-    if (
-        start is not None
-        and end is not None
-        and end >= start
-    ):
-
-        duration = (
-            end - start
-        ).total_seconds() / 60.0
-
-        episode[
-            "duration_minutes"
-        ] = round(
-            duration,
-            3
-        )
-
-        duration_count += 1
-
-    else:
-
-        episode[
-            "duration_minutes"
-        ] = ""
-
 
 print(
     f"Durées calculables     : "
@@ -546,75 +236,7 @@ print(
 
 
 # ============================================================
-# 5. STATUT HALT À LA CLÔTURE DE L'ÉPISODE
-# ============================================================
-
-close_yes = 0
-close_no = 0
-close_unknown = 0
-
-for episode in episodes:
-
-    start = episode[
-        "halt_start"
-    ]
-
-    end = episode[
-        "halt_end"
-    ]
-
-    if (
-        start is None
-        or end is None
-    ):
-
-        episode[
-            "halt_at_close"
-        ] = "UNKNOWN"
-
-        close_unknown += 1
-
-        continue
-
-    # --------------------------------------------------------
-    # Même journée
-    # --------------------------------------------------------
-
-    if start.date() == end.date():
-
-        if (
-            start.time()
-            <= MARKET_CLOSE
-            <= end.time()
-        ):
-
-            episode[
-                "halt_at_close"
-            ] = "YES"
-
-            close_yes += 1
-
-        else:
-
-            episode[
-                "halt_at_close"
-            ] = "NO"
-
-            close_no += 1
-
-    else:
-
-        # Episode multi-day.
-        #
-        # Le statut de clôture est calculé au niveau DAILY.
-
-        episode[
-            "halt_at_close"
-        ] = "MULTI_DAY"
-
-
-# ============================================================
-# 6. PERSISTANCE POSTGRESQL
+# 4. PERSISTANCE POSTGRESQL
 # ============================================================
 
 persist_nasdaq_halts(
@@ -624,7 +246,7 @@ persist_nasdaq_halts(
 
 
 # ============================================================
-# 7. NIVEAU 1 - TRADEHALTS
+# 5. NIVEAU 1 - TRADEHALTS
 # ============================================================
 
 with TRADEHALTS_FILE.open(
@@ -667,7 +289,7 @@ with TRADEHALTS_FILE.open(
 
 
 # ============================================================
-# 8. NIVEAU 2 - HALT EPISODES
+# 6. NIVEAU 2 - HALT EPISODES
 # ============================================================
 
 with EPISODES_FILE.open(
@@ -706,7 +328,7 @@ with EPISODES_FILE.open(
 
 
 # ============================================================
-# 9. NIVEAU 3 - DAILY
+# 7. NIVEAU 3 - DAILY
 # ============================================================
 
 daily = defaultdict(list)
@@ -901,7 +523,7 @@ with DAILY_FILE.open(
 
 
 # ============================================================
-# 10. NIVEAU 4 - TICKER METRICS V0.7
+# 8. NIVEAU 4 - TICKER METRICS V0.7
 # ============================================================
 
 episodes_by_symbol = defaultdict(list)
@@ -1200,7 +822,7 @@ with TICKER_METRICS_FILE.open(
 
 
 # ============================================================
-# 11. NIVEAU 5 - REASON METRICS
+# 9. NIVEAU 5 - REASON METRICS
 # ============================================================
 
 reason_data = defaultdict(list)
@@ -1308,7 +930,7 @@ with REASON_METRICS_FILE.open(
 
 
 # ============================================================
-# 12. TEST DE NON-RÉGRESSION - QVCG
+# 10. TEST DE NON-RÉGRESSION - QVCG
 # ============================================================
 
 print()
@@ -1435,7 +1057,7 @@ else:
 
 
 # ============================================================
-# 13. TEST DE NON-RÉGRESSION - BCARU
+# 11. TEST DE NON-RÉGRESSION - BCARU
 # ============================================================
 
 print()
@@ -1549,7 +1171,7 @@ else:
 
 
 # ============================================================
-# 14. VALIDATION FINALE
+# 12. VALIDATION FINALE
 # ============================================================
 
 print()
