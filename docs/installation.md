@@ -178,33 +178,41 @@ The historical project is retained temporarily as a reference copy. It must not 
 10. Correct and validate halt close status through migration `002`.
 11. Configure least-privilege PostgreSQL application roles.
 12. Install and validate Psycopg 3 connectivity.
-13. Validate PostgreSQL loading against the 744-event V0.6 dataset.
-14. Validate loader idempotence.
+13. Validate PostgreSQL loading against the 744-event baseline.
+14. Validate PostgreSQL idempotence.
 15. Validate fractional-second timestamp preservation.
 16. Configure Visual Studio Code PostgreSQL access.
 17. Establish reusable SQL query storage under `database/queries/`.
+18. Implement Nasdaq-specific PostgreSQL persistence.
+19. Integrate the V0.7 historical processing pipeline directly with PostgreSQL.
+20. Validate direct XML-to-PostgreSQL loading against 744 events.
+21. Validate XML source-file provenance in PostgreSQL.
+22. Validate direct V0.7 persistence idempotence.
 
 ### Current stage
 
-Integrate the Nasdaq Halt Collector directly with PostgreSQL.
+Complete and document the Nasdaq Halt V0.7 PostgreSQL integration checkpoint.
 
-The current CSV-based PostgreSQL loader is a validation and migration mechanism. It is not the final production integration.
+The historical XML processing path now writes directly to PostgreSQL without using processed CSV files as the integration layer.
+
+The live/current Nasdaq acquisition path must still be reviewed before the broader collector integration task is considered fully complete.
 
 ### Remaining stages
 
-1. Complete direct collector-to-PostgreSQL integration.
+1. Review and integrate the live/current Nasdaq acquisition path with the validated PostgreSQL persistence architecture.
 2. Load the five-year Nasdaq halt history.
 3. Validate the five-year dataset and current 1:1 RAW-to-CORE assumption.
-4. Validate timezone semantics.
-5. Model the authoritative market calendar.
-6. Create Nasdaq Halt analytical database objects.
-7. Build the broader database query interface.
-8. Configure automated execution.
-9. Configure on-demand execution.
-10. Configure and validate backup and restore procedures.
-11. Configure the Microsoft collaboration environment.
-12. Add the second collaborator when available.
-13. Prepare TEST and PROD security/infrastructure when required.
+4. Validate Python deduplication versus the PostgreSQL RAW natural key.
+5. Validate timezone semantics.
+6. Model the authoritative market calendar.
+7. Create Nasdaq Halt analytical database objects.
+8. Build the broader database query interface.
+9. Configure automated execution.
+10. Configure on-demand execution.
+11. Configure and validate backup and restore procedures.
+12. Configure the Microsoft collaboration environment.
+13. Add the second collaborator when available.
+14. Prepare TEST and PROD security/infrastructure when required.
 
 ## 10. GitHub Projects Configuration
 
@@ -265,7 +273,7 @@ N/A
 
 GitHub Issues are used for implementation work, validation activities and other actionable backlog items.
 
-The current platform work is focused on PostgreSQL integration for the Nasdaq Halt Collector.
+The current collector work is focused on completing the Nasdaq Halt PostgreSQL integration after validation of the V0.7 historical processing path.
 
 ## 11. Migration du collecteur Nasdaq Halts
 
@@ -301,9 +309,11 @@ Les éléments suivants ne sont pas ajoutés à Git :
 
 Les règles `.gitignore` excluent les données et logs locaux des composants QuantLab.
 
-Après migration, le moteur V0.6 a été exécuté depuis son nouvel emplacement.
+Après migration, le moteur V0.6 a d'abord été exécuté depuis son nouvel emplacement afin d'établir le baseline de non-régression.
 
-Résultats de validation :
+Le pipeline a ensuite évolué vers V0.7 avec persistance PostgreSQL directe.
+
+Résultats V0.7 de validation :
 
 ```text
 Événements bruts       : 744
@@ -332,7 +342,25 @@ QVCG TEST              : PASS
 BCARU TEST             : PASS
 ```
 
-La migration du collecteur Nasdaq Halts vers le monorepo est validée.
+Persistance PostgreSQL après nettoyage de la base DEV :
+
+```text
+RAW inserted           : 744
+RAW existing           : 0
+CORE inserted          : 744
+CORE existing          : 0
+```
+
+Une réexécution contre les mêmes données a validé l'idempotence :
+
+```text
+RAW inserted           : 0
+RAW existing           : 744
+CORE inserted          : 0
+CORE existing          : 744
+```
+
+La provenance `source_file` a également été validée avec les noms réels des fichiers XML historiques.
 
 ## 12. Python Environment
 
@@ -390,7 +418,7 @@ The validated installed Psycopg version in the current DEV environment is:
 3.3.4
 ```
 
-The Nasdaq V0.6 metric-calculation engine itself uses Python standard-library functionality, while PostgreSQL integration requires Psycopg.
+The Nasdaq V0.7 processing pipeline uses Psycopg for PostgreSQL persistence.
 
 Dependencies should be installed into the monorepo virtual environment rather than globally.
 
@@ -634,14 +662,19 @@ QUANTLAB_DB_USER
 QUANTLAB_DB_PASSWORD
 ```
 
-For the current DEV PowerShell session, non-secret values may be configured as environment variables.
-
-The password should be requested securely rather than written literally into shell history.
-
-Example pattern:
+For the current DEV PowerShell session, the non-secret variables can be configured with:
 
 ```powershell
-$securePassword = Read-Host "PostgreSQL password" -AsSecureString
+$env:QUANTLAB_DB_HOST = "quantlab-postgres-dev.postgres.database.azure.com"
+$env:QUANTLAB_DB_PORT = "5432"
+$env:QUANTLAB_DB_NAME = "quantlab"
+$env:QUANTLAB_DB_USER = "quantlab_collector_dev"
+```
+
+The password should be requested securely rather than written literally into shell history:
+
+```powershell
+$securePassword = Read-Host "PostgreSQL password for quantlab_collector_dev" -AsSecureString
 $env:QUANTLAB_DB_PASSWORD = [System.Net.NetworkCredential]::new("", $securePassword).Password
 ```
 
@@ -674,29 +707,159 @@ The connection layer reads its configuration from the environment variables defi
 
 Connectivity from the monorepo virtual environment to Azure PostgreSQL using the DEV application account has been successfully validated.
 
-## 21. PostgreSQL Validation Loader
+## 21. Nasdaq PostgreSQL Persistence V0.7
 
-The current validation loader is:
+Nasdaq-specific PostgreSQL persistence is implemented in:
 
 ```text
-collectors/nasdaq_halts/src/load_postgresql.py
+collectors/nasdaq_halts/src/nasdaq_postgresql.py
 ```
 
-Because it imports modules from the monorepo root, it is executed from:
+It uses the shared connection layer from:
+
+```text
+shared/database/
+```
+
+The module persists:
+
+```text
+unique_events
+```
+
+to:
+
+```text
+raw.nasdaq_trade_halt
+```
+
+and:
+
+```text
+episodes
+```
+
+to:
+
+```text
+core.nasdaq_halt_episode
+```
+
+The writer implements:
+
+- RAW natural-key conflict handling;
+- idempotent insertion;
+- retrieval of existing RAW identifiers;
+- XML `source_file` provenance;
+- close-status validation;
+- strict RAW-to-CORE relationship validation;
+- transactional persistence.
+
+The current RAW natural key is:
+
+```text
+symbol
+halt_date
+halt_time
+reason_code
+market
+```
+
+The current CORE model assumes:
+
+```text
+1 RAW event -> 1 CORE episode
+```
+
+This assumption is validated on the 744-event V0.7 dataset but must be revalidated against the complete historical dataset.
+
+If the writer cannot associate an episode unambiguously with exactly one RAW event under the current model, execution fails explicitly rather than selecting an arbitrary relationship.
+
+## 22. Running the Nasdaq V0.7 Processing Pipeline
+
+Because the V0.7 processor imports modules from the QuantLab monorepo root, the reference execution is performed from:
 
 ```text
 C:\QuantLab\QuantLab
 ```
 
-using:
+with the monorepo virtual environment active.
+
+Reference command:
+
+```powershell
+python -m collectors.nasdaq_halts.src.calculate_halt_metrics
+```
+
+Direct execution using the Python file path is not the reference invocation.
+
+### PostgreSQL requirement
+
+In the current V0.7 implementation, PostgreSQL persistence is invoked directly by the processing pipeline.
+
+Therefore, before running the command, the following environment variables must exist in the current PowerShell session:
+
+```text
+QUANTLAB_DB_HOST
+QUANTLAB_DB_PORT
+QUANTLAB_DB_NAME
+QUANTLAB_DB_USER
+QUANTLAB_DB_PASSWORD
+```
+
+The workstation must also:
+
+- have network access to the PostgreSQL endpoint;
+- be permitted by the Azure firewall;
+- have Psycopg installed in the active virtual environment;
+- use an application account with the required RAW and CORE privileges.
+
+A PostgreSQL connection or persistence error causes the current V0.7 execution to fail rather than silently bypassing database persistence.
+
+This behavior reflects the current implementation and should be reconsidered explicitly if a future offline/non-database processing mode is required.
+
+### Validated execution
+
+A clean direct V0.7 load produced:
+
+```text
+RAW inserted   : 744
+RAW existing   : 0
+CORE inserted  : 744
+CORE existing  : 0
+```
+
+A subsequent execution produced:
+
+```text
+RAW inserted   : 0
+RAW existing   : 744
+CORE inserted  : 0
+CORE existing  : 744
+```
+
+The non-regression tests remained:
+
+```text
+QVCG TEST : PASS
+BCARU TEST: PASS
+```
+
+## 23. Transitional PostgreSQL CSV Loader
+
+The previous validation loader remains available at:
+
+```text
+collectors/nasdaq_halts/src/load_postgresql.py
+```
+
+Reference invocation:
 
 ```powershell
 python -m collectors.nasdaq_halts.src.load_postgresql
 ```
 
-Direct execution by file path is not the reference invocation.
-
-The loader currently reads:
+It reads:
 
 ```text
 collectors/nasdaq_halts/data/processed/tradehalts.csv
@@ -710,64 +873,30 @@ raw.nasdaq_trade_halt
 core.nasdaq_halt_episode
 ```
 
-### First validated execution
+This loader was used to validate the initial PostgreSQL foundation against the known processed dataset.
+
+It is retained as a validation and migration utility.
+
+It is not the preferred V0.7 integration path.
+
+The current direct processing path is:
 
 ```text
-RAW inserted   : 744
-RAW existing   : 0
-CORE inserted  : 744
-CORE existing  : 0
-```
-
-### Idempotence validation
-
-A second execution of the same dataset produced:
-
-```text
-RAW inserted   : 0
-RAW existing   : 744
-CORE inserted  : 0
-CORE existing  : 744
-```
-
-This confirms idempotence for the current V0.6 validation dataset.
-
-The loader uses a common transaction for RAW and CORE processing. Failed validation attempts confirmed that database changes are rolled back when an exception occurs.
-
-Fractional-second Nasdaq times are preserved during parsing and PostgreSQL insertion.
-
-### Important architectural limitation
-
-This loader is transitional.
-
-It exists to validate the PostgreSQL schema and database integration against the known V0.6 CSV outputs.
-
-The target production architecture is:
-
-```text
-Nasdaq Web / RSS
+XML RAW
         |
         v
-Collector
-        |
-        +----> XML RAW retained
-        |
-        v
-Parsing / Normalization
+Python parsing / normalization
         |
         v
 PostgreSQL RAW
         |
         v
 PostgreSQL CORE
-        |
-        v
-Analytics
 ```
 
-The production collector must eventually write through reusable PostgreSQL persistence functionality without requiring CSV files as the integration layer.
+Processed CSV files remain useful for diagnostics, exports and non-regression testing.
 
-## 22. Visual Studio Code PostgreSQL Tools
+## 24. Visual Studio Code PostgreSQL Tools
 
 The Microsoft PostgreSQL extension is installed in Visual Studio Code for DEV database exploration.
 
@@ -819,7 +948,7 @@ Developer: Reload Window
 
 then reopen the saved SQL file and reconnect it if necessary.
 
-## 23. UTF-8 PowerShell Display
+## 25. UTF-8 PowerShell Display
 
 QuantLab documentation and source files should be maintained in UTF-8.
 
@@ -833,36 +962,30 @@ If UTF-8 text is displayed incorrectly in a PowerShell terminal, configure the c
 Markdown files can be explicitly read as UTF-8 with:
 
 ```powershell
-Get-Content .\docs\database.md -Raw -Encoding UTF8
+Get-Content .\docs\installation.md -Raw -Encoding UTF8
 ```
 
 This affects terminal interpretation/display and does not by itself indicate that the underlying file is corrupted.
 
-## 24. Next Implementation Stage
+## 26. Next Implementation Stage
 
-The current database foundation has been validated.
+The V0.7 historical processing path now performs direct PostgreSQL persistence and has been validated against the 744-event baseline.
 
-The next implementation stage is direct Nasdaq Halt Collector integration with PostgreSQL.
+The immediate next technical checkpoint is to review the live/current Nasdaq acquisition path and determine how it should use the same persistence architecture.
 
-The objective is to replace the transitional dependency:
+After that integration is validated, the next major data stage is the five-year historical load.
 
-```text
-Collector
--> processed CSV
--> PostgreSQL validation loader
-```
+The five-year validation must specifically test:
 
-with the production path:
+- RAW natural-key uniqueness;
+- Python versus PostgreSQL deduplication semantics;
+- RAW-to-CORE cardinality;
+- overlapping/merged episodes;
+- source-file provenance;
+- timestamp precision;
+- timezone semantics;
+- multi-day behavior;
+- market-calendar semantics;
+- full-volume idempotence.
 
-```text
-Collector
--> parsing / normalization
--> reusable PostgreSQL persistence layer
--> RAW / CORE PostgreSQL
-```
-
-while continuing to retain the original XML RAW source files for provenance and rebuildability.
-
-The existing V0.6 CSV outputs should remain available for diagnostics, exports and non-regression validation where useful.
-
-The five-year historical load must occur only after the direct integration path and required semantics have been sufficiently validated.
+The historical dataset must not be considered certified until these checks have been completed.

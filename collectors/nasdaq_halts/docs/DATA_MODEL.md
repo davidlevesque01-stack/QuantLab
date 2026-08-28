@@ -1,986 +1,843 @@
-\# QuantLab – Nasdaq Halt Collector
+# QuantLab — Nasdaq Halt Collector
 
+## Modèle de données PostgreSQL
 
+**Version : V1.1**
+**Statut : Modèle DEV implémenté et validé sur le baseline V0.7**
+**Date : 2026-08-28**
 
-\## Modèle de données PostgreSQL
+---
 
+## 1. Objectif
 
-
-\*\*Version :\*\* V1.0
-
-\*\*Statut :\*\* Conception initiale
-
-\*\*Date :\*\* 2026-08-28
-
-
-
-\---
-
-
-
-\## 1. Objectif
-
-
-
-Ce document définit le modèle de données PostgreSQL utilisé par le module \*\*QuantLab – Nasdaq Halt Collector\*\*.
-
-
+Ce document définit le modèle de données PostgreSQL utilisé par le composant **QuantLab — Nasdaq Halt Collector**.
 
 Le modèle vise à :
 
+* conserver les événements Nasdaq Trade Halt sous une forme structurée;
+* préserver la provenance vers les fichiers XML originaux;
+* assurer la déduplication lors des chargements;
+* représenter les épisodes de suspension de négociation;
+* préserver correctement les épisodes multi-jours;
+* permettre la reconstruction future des données analytiques;
+* supporter le chargement historique et les mises à jour futures;
+* permettre une ingestion idempotente;
+* détecter explicitement les situations incompatibles avec les hypothèses actuelles du modèle.
 
+Les fichiers XML Nasdaq conservés sous :
 
-\* conserver les événements Nasdaq Trade Halt sous une forme structurée;
+```text
+collectors/nasdaq_halts/data/raw/nasdaq/
+```
 
-\* assurer la déduplication des événements lors des chargements historiques et quotidiens;
+demeurent les données externes originales de provenance.
 
-\* représenter les épisodes de suspension de négociation;
+PostgreSQL constitue la représentation structurée et interrogeable partagée de QuantLab.
 
-\* permettre le traitement correct des épisodes couvrant plusieurs jours;
+---
 
-\* fournir des données analytiques par symbole, journée et raison de suspension;
-
-\* permettre la reconstruction des métriques analytiques à partir des données de base;
-
-\* supporter le chargement initial de plusieurs années d'historique ainsi que les mises à jour quotidiennes futures.
-
-
-
-Les fichiers XML Nasdaq conservés dans `data/raw/nasdaq/` demeurent la source originale de provenance des données externes.
-
-
-
-PostgreSQL constitue la source structurée et interrogeable de QuantLab.
-
-
-
-\---
-
-
-
-\## 2. Principes du modèle
-
-
+## 2. Organisation du modèle
 
 Le modèle est organisé en trois couches PostgreSQL :
 
-
-
 ```text
-
 raw
-
-│
-
-└── nasdaq\_trade\_halt
-
-
+ |
+ +-- nasdaq_trade_halt
 
 core
-
-│
-
-└── nasdaq\_halt\_episode
-
-
+ |
+ +-- nasdaq_halt_episode
 
 analytics
-
-│
-
-├── ticker\_halt\_daily
-
-├── ticker\_halt\_metrics
-
-└── ticker\_halt\_reason\_metrics
-
+ |
+ +-- objets futurs
 ```
 
+### 2.1 Couche `raw`
 
+La couche `raw` contient les événements structurés provenant des données Nasdaq.
 
-\### 2.1 Couche `raw`
+Elle reste aussi près que raisonnablement possible de la donnée source tout en appliquant les conversions de types nécessaires.
 
-
-
-La couche `raw` contient les événements normalisés provenant directement des données Nasdaq.
-
-
-
-Elle doit rester aussi près que raisonnablement possible de la donnée source tout en appliquant les conversions de types nécessaires.
-
-
-
-\### 2.2 Couche `core`
-
-
-
-La couche `core` contient les objets métier reconstruits à partir des événements bruts.
-
-
-
-Pour le Nasdaq Halt Collector, l'objet principal est l'épisode de suspension de négociation.
-
-
-
-\### 2.3 Couche `analytics`
-
-
-
-La couche `analytics` contient les données dérivées utilisées pour les analyses, métriques et interfaces de consultation.
-
-
-
-Ces données doivent pouvoir être reconstruites à partir de la couche `core`.
-
-
-
-\---
-
-
-
-\# 3. Table `raw.nasdaq\_trade\_halt`
-
-
-
-Cette table contient les événements Nasdaq Trade Halt normalisés.
-
-
-
-\## Colonnes
-
-
-
-| Colonne                 | Type PostgreSQL | Contraintes                               |
-
-| ----------------------- | --------------- | ----------------------------------------- |
-
-| `id`                    | BIGINT          | PRIMARY KEY, GENERATED ALWAYS AS IDENTITY |
-
-| `symbol`                | VARCHAR(20)     | NOT NULL                                  |
-
-| `issue\_name`            | TEXT            |                                           |
-
-| `market`                | VARCHAR(10)     |                                           |
-
-| `reason\_code`           | VARCHAR(20)     | NOT NULL                                  |
-
-| `halt\_date`             | DATE            | NOT NULL                                  |
-
-| `halt\_time`             | TIME            |                                           |
-
-| `resumption\_date`       | DATE            |                                           |
-
-| `resumption\_quote\_time` | TIME            |                                           |
-
-| `resumption\_trade\_time` | TIME            |                                           |
-
-| `pause\_threshold\_price` | NUMERIC(18,6)   |                                           |
-
-| `source\_file`           | TEXT            |                                           |
-
-| `loaded\_at`             | TIMESTAMPTZ     | NOT NULL, DEFAULT now()                   |
-
-
-
-\## Clé naturelle
-
-
-
-La clé naturelle retenue est :
-
-
+Objet actuel :
 
 ```text
+raw.nasdaq_trade_halt
+```
 
+### 2.2 Couche `core`
+
+La couche `core` contient les objets métier reconstruits à partir des événements RAW.
+
+Objet actuel :
+
+```text
+core.nasdaq_halt_episode
+```
+
+### 2.3 Couche `analytics`
+
+La couche `analytics` est réservée aux datasets et objets analytiques dérivés.
+
+Le schéma existe, mais les objets analytiques Nasdaq Halts ne sont pas encore implémentés.
+
+Leur création est volontairement différée jusqu'à validation :
+
+* du calendrier officiel des jours de marché;
+* des épisodes multi-jours;
+* de la cardinalité RAW→CORE;
+* de la sémantique des statuts de clôture;
+* des résultats sur l'historique complet.
+
+---
+
+## 3. Table `raw.nasdaq_trade_halt`
+
+Cette table contient les événements Nasdaq Trade Halt structurés.
+
+### Colonnes
+
+| Colonne | Type PostgreSQL | Contraintes |
+|---|---|---|
+| `id` | BIGINT | PRIMARY KEY, GENERATED ALWAYS AS IDENTITY |
+| `symbol` | VARCHAR(20) | NOT NULL |
+| `issue_name` | TEXT | |
+| `market` | VARCHAR(10) | NOT NULL |
+| `reason_code` | VARCHAR(20) | NOT NULL |
+| `halt_date` | DATE | NOT NULL |
+| `halt_time` | TIME | NOT NULL |
+| `resumption_date` | DATE | |
+| `resumption_quote_time` | TIME | |
+| `resumption_trade_time` | TIME | |
+| `pause_threshold_price` | NUMERIC(18,6) | |
+| `source_file` | TEXT | |
+| `loaded_at` | TIMESTAMPTZ | DEFAULT CURRENT_TIMESTAMP |
+
+### Clé naturelle
+
+La clé naturelle PostgreSQL actuelle est :
+
+```text
 symbol
-
-halt\_date
-
-halt\_time
-
-reason\_code
-
+halt_date
+halt_time
+reason_code
 market
-
 ```
 
+Une contrainte UNIQUE empêche le chargement répété du même événement sous cette clé.
 
-
-Une contrainte UNIQUE doit empêcher le chargement répété du même événement.
-
-
-
-Cette clé a été validée sur le dataset V0.6 :
-
-
+Validation V0.7 :
 
 ```text
-
-Événements analysés       : 744
-
-Clés naturelles dupliquées: 0
-
+Événements analysés        : 744
+Clés naturelles dupliquées : 0
 ```
 
+Cette hypothèse devra être revalidée sur l'historique complet de cinq ans.
 
+---
 
-Cette validation devra être répétée sur l'historique complet avant de considérer cette hypothèse comme définitive.
+## 4. Provenance RAW
 
-
-
-\---
-
-
-
-\# 4. Table `core.nasdaq\_halt\_episode`
-
-
-
-Cette table représente les épisodes de suspension reconstruits à partir des événements Nasdaq.
-
-
-
-\## Colonnes
-
-
-
-| Colonne                | Type PostgreSQL | Contraintes                                    |
-
-| ---------------------- | --------------- | ---------------------------------------------- |
-
-| `id`                   | BIGINT          | PRIMARY KEY, GENERATED ALWAYS AS IDENTITY      |
-
-| `trade\_halt\_id`        | BIGINT          | référence vers `raw.nasdaq\_trade\_halt.id`      |
-
-| `collector\_episode\_id` | VARCHAR(20)     | identifiant généré par le collector, optionnel |
-
-| `symbol`               | VARCHAR(20)     | NOT NULL                                       |
-
-| `issue\_name`           | TEXT            |                                                |
-
-| `market`               | VARCHAR(10)     |                                                |
-
-| `reason\_code`          | VARCHAR(20)     |                                                |
-
-| `halt\_start`           | TIMESTAMP       | NOT NULL                                       |
-
-| `halt\_end`             | TIMESTAMP       |                                                |
-
-| `duration\_minutes`     | NUMERIC(12,3)   |                                                |
-
-| `halt\_at\_close`        | BOOLEAN         |                                                |
-
-
-
-\## Identifiant
-
-
-
-Les identifiants actuels du collector :
-
-
+Chaque événement parsé par le pipeline V0.7 contient :
 
 ```text
+source_file
+```
 
+Cette valeur correspond au nom du fichier XML ayant fourni l'événement.
+
+Exemple :
+
+```text
+tradehalts_2026-08-03.xml
+```
+
+Elle est persistée dans :
+
+```text
+raw.nasdaq_trade_halt.source_file
+```
+
+La validation directe V0.7 a produit 744 lignes RAW provenant de 10 fichiers XML historiques.
+
+PostgreSQL ne conserve pas actuellement le contenu XML complet.
+
+Le contenu original demeure dans la couche RAW du filesystem.
+
+Le modèle de provenance actuel est donc :
+
+```text
+XML original
+     |
+     | nom du fichier
+     v
+raw.nasdaq_trade_halt.source_file
+```
+
+Si un même événement naturel est découvert dans plusieurs fichiers XML lors de la validation historique complète, ce modèle de provenance devra être réévalué afin de déterminer si une relation distincte entre événements et sources est nécessaire.
+
+---
+
+## 5. Déduplication RAW
+
+Le pipeline Python V0.7 possède sa propre logique de déduplication avant la persistance PostgreSQL.
+
+La clé Python actuelle n'est pas identique à la clé naturelle PostgreSQL.
+
+Sur le dataset V0.7 :
+
+```text
+Événements bruts       : 744
+Événements uniques     : 744
+Clés PostgreSQL dupliquées : 0
+```
+
+Aucune divergence n'est observée sur ce baseline.
+
+Cette équivalence ne doit toutefois pas être présumée sur cinq années de données.
+
+La validation historique devra comparer explicitement :
+
+```text
+déduplication Python
+vs
+clé naturelle PostgreSQL
+```
+
+Une divergence devra conduire à une décision explicite sur le modèle.
+
+---
+
+## 6. Table `core.nasdaq_halt_episode`
+
+Cette table représente les épisodes de suspension reconstruits par le pipeline Python.
+
+### Colonnes
+
+| Colonne | Type PostgreSQL | Contraintes |
+|---|---|---|
+| `id` | BIGINT | PRIMARY KEY, GENERATED ALWAYS AS IDENTITY |
+| `trade_halt_id` | BIGINT | NOT NULL, FK RAW, UNIQUE |
+| `collector_episode_id` | VARCHAR(20) | optionnel |
+| `symbol` | VARCHAR(20) | NOT NULL |
+| `issue_name` | TEXT | |
+| `market` | VARCHAR(10) | |
+| `reason_code` | VARCHAR(20) | |
+| `halt_start` | TIMESTAMP | NOT NULL |
+| `halt_end` | TIMESTAMP | |
+| `duration_minutes` | NUMERIC(12,3) | |
+| `halt_close_status` | VARCHAR(20) | CHECK |
+
+La contrainte de statut permet actuellement :
+
+```text
+YES
+NO
+UNKNOWN
+MULTI_DAY
+```
+
+La durée doit être positive ou nulle lorsqu'elle est disponible.
+
+Lorsque `halt_end` est disponible, il ne doit pas précéder `halt_start`.
+
+---
+
+## 7. Relation RAW → CORE
+
+Le modèle actuel impose :
+
+```text
+1 RAW event -> 1 CORE episode
+```
+
+La contrainte :
+
+```text
+UNIQUE (trade_halt_id)
+```
+
+empêche plusieurs épisodes CORE de référencer le même événement RAW.
+
+Le baseline V0.7 contient :
+
+```text
+RAW events    : 744
+CORE episodes : 744
+```
+
+Cette relation 1:1 est donc valide sur le dataset actuel.
+
+Elle n'est cependant pas encore considérée comme une propriété universelle des données Nasdaq.
+
+### Risque identifié
+
+L'algorithme Python de construction des épisodes peut théoriquement fusionner plusieurs événements lorsque leurs périodes se chevauchent.
+
+Dans une telle situation :
+
+```text
+plusieurs RAW
+     |
+     v
+un épisode logique
+```
+
+serait incompatible avec le modèle PostgreSQL 1:1 actuel.
+
+Le writer V0.7 détecte cette situation au lieu de choisir arbitrairement une relation.
+
+La cardinalité devra être revalidée sur l'historique complet avant stabilisation du modèle.
+
+---
+
+## 8. Identifiant d'épisode du collector
+
+Le pipeline génère actuellement des identifiants tels que :
+
+```text
 H00000001
-
 H00000002
-
 ...
-
 ```
 
-
-
-ne constituent pas la clé primaire PostgreSQL.
-
-
-
-Ils peuvent changer lors d'une reconstruction complète du dataset.
-
-
-
-PostgreSQL utilise donc une clé technique générée automatiquement.
-
-
-
-L'identifiant du collector peut être conservé dans `collector\_episode\_id` à des fins de diagnostic et de traçabilité.
-
-
-
-\## Relation avec les événements
-
-
-
-Le dataset V0.6 contient :
-
-
+Ils sont conservés dans :
 
 ```text
-
-Trade Halt Events : 744
-
-Halt Episodes     : 744
-
+collector_episode_id
 ```
 
+Ils ne constituent pas la clé primaire PostgreSQL.
 
+PostgreSQL utilise :
 
-Les 744 `episode\_id` sont uniques.
+```text
+core.nasdaq_halt_episode.id
+```
 
+comme clé technique.
 
+Les identifiants du collector étant actuellement générés séquentiellement, ils peuvent changer lorsqu'un dataset plus large est reconstruit.
 
-La relation observée actuellement est donc 1:1.
+Ils ne doivent donc pas être considérés comme des identifiants métier durables tant que leur stabilité n'a pas été explicitement définie.
 
+---
 
+## 9. Statut de clôture
 
-Cette hypothèse devra également être validée sur l'historique complet.
+Le modèle initial utilisait :
 
+```text
+halt_at_close BOOLEAN
+```
 
+Cette représentation s'est révélée insuffisante pour préserver la sémantique des épisodes multi-jours.
 
-\---
+La migration :
 
+```text
+002_fix_nasdaq_halt_close_status.sql
+```
 
+a remplacé ce champ par :
 
-\# 5. Épisodes multi-jours
+```text
+halt_close_status VARCHAR(20)
+```
 
+Valeurs autorisées :
 
+```text
+YES
+NO
+UNKNOWN
+MULTI_DAY
+```
 
-Un épisode peut couvrir plus d'une journée de marché.
+Distribution V0.7 validée :
 
+```text
+YES       : 15
+NO        : 697
+UNKNOWN   : 2
+MULTI_DAY : 30
+TOTAL     : 744
+```
 
+Il ne faut donc pas convertir automatiquement ces valeurs en BOOLEAN au niveau CORE.
+
+En particulier :
+
+```text
+MULTI_DAY
+```
+
+possède une sémantique distincte qui doit être conservée.
+
+---
+
+## 10. Épisodes multi-jours
+
+Un épisode peut couvrir plus d'une journée.
 
 Par conséquent :
 
-
-
 ```text
-
 nombre d'épisodes
-
 ```
-
-
 
 et :
 
-
-
 ```text
-
 nombre de jours affectés
-
 ```
 
+représentent deux concepts différents.
 
+Le modèle CORE représente l'épisode complet.
 
-représentent deux concepts distincts.
+La future couche analytique pourra représenter séparément les journées affectées, mais cette logique devra utiliser un calendrier de marché validé.
 
+La simple génération de dates calendaires entre `halt_start` et `halt_end` n'est pas suffisante puisqu'elle pourrait inclure :
 
+* fins de semaine;
+* jours fériés;
+* journées où le marché concerné n'était pas ouvert.
 
-Exemple observé dans V0.6 :
+---
 
+## 11. Gestion du temps
 
+La couche RAW conserve les composantes temporelles proches de la source :
 
 ```text
-
-Symbol              : ABVC
-
-Total halt episodes : 1
-
-Halt days           : 2
-
+halt_date
+halt_time
+resumption_date
+resumption_quote_time
+resumption_trade_time
 ```
 
-
-
-Le modèle doit conserver cette distinction.
-
-
-
-La table `core.nasdaq\_halt\_episode` représente l'épisode complet tandis que la couche analytique peut représenter individuellement chaque journée affectée.
-
-
-
-\---
-
-
-
-\# 6. Objet `analytics.ticker\_halt\_daily`
-
-
-
-Cet objet représente l'activité de suspension quotidienne par symbole.
-
-
-
-\## Colonnes
-
-
-
-| Colonne         | Type PostgreSQL |
-
-| --------------- | --------------- |
-
-| `symbol`        | VARCHAR(20)     |
-
-| `date`          | DATE            |
-
-| `halt\_present`  | BOOLEAN         |
-
-| `episode\_count` | INTEGER         |
-
-| `halt\_at\_close` | BOOLEAN         |
-
-
-
-Clé logique :
-
-
+La couche CORE utilise :
 
 ```text
-
-PRIMARY KEY (symbol, date)
-
+halt_start
+halt_end
 ```
 
+Les timestamps fractionnaires sont préservés.
 
-
-Cet objet est entièrement dérivable de `core.nasdaq\_halt\_episode`.
-
-
-
-Il devrait donc préférablement être implémenté sous forme de \*\*vue matérialisée\*\* plutôt que comme une table indépendante alimentée par le collector.
-
-
-
-\---
-
-
-
-\# 7. Objet `analytics.ticker\_halt\_metrics`
-
-
-
-Cet objet contient les métriques consolidées par symbole.
-
-
-
-\## Colonnes
-
-
-
-| Colonne                        | Type PostgreSQL |
-
-| ------------------------------ | --------------- |
-
-| `symbol`                       | VARCHAR(20)     |
-
-| `total\_halt\_episodes`          | INTEGER         |
-
-| `halt\_days`                    | INTEGER         |
-
-| `halt\_days\_at\_close`           | INTEGER         |
-
-| `halt\_at\_close\_pct`            | NUMERIC(8,4)    |
-
-| `halts\_per\_halt\_day`           | NUMERIC(12,6)   |
-
-| `halts\_per\_market\_day`         | NUMERIC(12,6)   |
-
-| `avg\_halt\_duration\_minutes`    | NUMERIC(12,3)   |
-
-| `median\_halt\_duration\_minutes` | NUMERIC(12,3)   |
-
-| `min\_halt\_duration\_minutes`    | NUMERIC(12,3)   |
-
-| `max\_halt\_duration\_minutes`    | NUMERIC(12,3)   |
-
-| `first\_halt\_date`              | DATE            |
-
-| `last\_halt\_date`               | DATE            |
-
-
-
-Clé logique :
-
-
+Exemple validé :
 
 ```text
-
-symbol
-
+2026-08-03 08:52:20.892
 ```
 
-
-
-Cet objet est dérivé de `core.nasdaq\_halt\_episode` et des journées de marché considérées par la période analytique.
-
-
-
-Une vue matérialisée est privilégiée.
-
-
-
-\---
-
-
-
-\# 8. Objet `analytics.ticker\_halt\_reason\_metrics`
-
-
-
-Cet objet contient les métriques par symbole et par code de raison Nasdaq.
-
-
-
-\## Colonnes
-
-
-
-| Colonne                | Type PostgreSQL |
-
-| ---------------------- | --------------- |
-
-| `symbol`               | VARCHAR(20)     |
-
-| `reason\_code`          | VARCHAR(20)     |
-
-| `halt\_episodes`        | INTEGER         |
-
-| `avg\_duration\_minutes` | NUMERIC(12,3)   |
-
-| `min\_duration\_minutes` | NUMERIC(12,3)   |
-
-| `max\_duration\_minutes` | NUMERIC(12,3)   |
-
-
-
-Clé logique :
-
-
+La chaîne suivante a été validée :
 
 ```text
-
-PRIMARY KEY (symbol, reason\_code)
-
-```
-
-
-
-Cet objet est dérivé de `core.nasdaq\_halt\_episode`.
-
-
-
-Une vue matérialisée est privilégiée.
-
-
-
-\---
-
-
-
-\# 9. Index
-
-
-
-Les index suivants sont prévus initialement.
-
-
-
-\## `raw.nasdaq\_trade\_halt`
-
-
-
-```text
-
-UNIQUE (symbol, halt\_date, halt\_time, reason\_code, market)
-
-
-
-INDEX (symbol)
-
-INDEX (halt\_date)
-
-INDEX (reason\_code)
-
-INDEX (symbol, halt\_date)
-
-```
-
-
-
-\## `core.nasdaq\_halt\_episode`
-
-
-
-```text
-
-INDEX (trade\_halt\_id)
-
-INDEX (symbol)
-
-INDEX (halt\_start)
-
-INDEX (reason\_code)
-
-INDEX (symbol, halt\_start)
-
-```
-
-
-
-Les index supplémentaires devront être ajoutés en fonction des requêtes réelles plutôt que par anticipation.
-
-
-
-\---
-
-
-
-\# 10. Gestion des valeurs booléennes
-
-
-
-Les fichiers CSV V0.6 utilisent notamment :
-
-
-
-```text
-
-YES
-
-NO
-
-UNKNOWN
-
-```
-
-
-
-PostgreSQL doit utiliser autant que possible le type natif :
-
-
-
-```text
-
-BOOLEAN
-
-```
-
-
-
-avec :
-
-
-
-```text
-
-YES     → TRUE
-
-NO      → FALSE
-
-UNKNOWN → NULL
-
-```
-
-
-
-Cette convention s'applique notamment à `halt\_at\_close`.
-
-
-
-\---
-
-
-
-\# 11. Gestion du temps
-
-
-
-Les fichiers sources contiennent des dates et heures séparées alors que les épisodes utilisent des timestamps reconstruits.
-
-
-
-La couche `raw` conserve cette structure proche de la source :
-
-
-
-```text
-
-halt\_date
-
-halt\_time
-
-resumption\_date
-
-resumption\_quote\_time
-
-resumption\_trade\_time
-
-```
-
-
-
-La couche `core` utilise :
-
-
-
-```text
-
-halt\_start
-
-halt\_end
-
-```
-
-
-
-Les règles relatives au fuseau horaire Nasdaq devront être documentées explicitement avant le chargement historique complet.
-
-
-
-Aucune conversion implicite de fuseau horaire ne doit être introduite sans validation.
-
-
-
-\---
-
-
-
-\# 12. Provenance
-
-
-
-Les fichiers XML téléchargés depuis Nasdaq demeurent conservés dans :
-
-
-
-```text
-
-collectors/nasdaq\_halts/data/raw/nasdaq/
-
-```
-
-
-
-Ils constituent la donnée externe originale permettant de reconstruire les datasets PostgreSQL.
-
-
-
-Chaque événement PostgreSQL doit pouvoir conserver une référence à son fichier source au moyen de :
-
-
-
-```text
-
-source\_file
-
-```
-
-
-
-Le contenu RAW ne doit pas être supprimé après ingestion réussie.
-
-
-
-\---
-
-
-
-\# 13. Reconstruction des données
-
-
-
-L'architecture doit permettre le flux suivant :
-
-
-
-```text
-
 Nasdaq XML
+-> parser Python V0.7
+-> PostgreSQL
+```
 
-&#x20;   ↓
+Les colonnes CORE utilisent actuellement :
 
+```text
+TIMESTAMP
+```
+
+sans fuseau horaire.
+
+Cette décision permet de préserver les valeurs temporelles interprétées actuellement par le pipeline sans appliquer une conversion implicite.
+
+La sémantique exacte du fuseau horaire Nasdaq devra être validée avant certification de l'historique complet.
+
+---
+
+## 12. Persistance PostgreSQL
+
+La persistance Nasdaq spécifique est implémentée dans :
+
+```text
+collectors/nasdaq_halts/src/nasdaq_postgresql.py
+```
+
+Le module utilise la connexion PostgreSQL générique définie sous :
+
+```text
+shared/database/
+```
+
+Le flux actuel est :
+
+```text
+unique_events
+      |
+      v
+raw.nasdaq_trade_halt
+      |
+      | trade_halt_id
+      v
+core.nasdaq_halt_episode
+```
+
+La persistance RAW et CORE est exécutée dans une même connexion transactionnelle.
+
+### Idempotence validée
+
+Premier chargement direct après nettoyage DEV :
+
+```text
+RAW inserted   : 744
+RAW existing   : 0
+CORE inserted  : 744
+CORE existing  : 0
+```
+
+Réexécution :
+
+```text
+RAW inserted   : 0
+RAW existing   : 744
+CORE inserted  : 0
+CORE existing  : 744
+```
+
+La persistance est donc idempotente sur le baseline V0.7.
+
+---
+
+## 13. Loader CSV transitoire
+
+Le module :
+
+```text
+collectors/nasdaq_halts/src/load_postgresql.py
+```
+
+a servi à valider initialement le modèle PostgreSQL à partir des CSV du baseline V0.6.
+
+Il est conservé comme outil de validation et de migration.
+
+Il ne constitue plus le chemin de persistance privilégié.
+
+Le chemin V0.7 est :
+
+```text
+XML RAW
+-> parsing / normalisation
+-> PostgreSQL RAW
+-> PostgreSQL CORE
+```
+
+Les CSV demeurent des datasets dérivés utiles pour :
+
+* validation;
+* diagnostic;
+* comparaison;
+* non-régression;
+* export.
+
+---
+
+## 14. Index
+
+Les index et contraintes actuels doivent principalement répondre aux besoins réels de déduplication, relation et interrogation.
+
+### `raw.nasdaq_trade_halt`
+
+La clé naturelle unique est :
+
+```text
+UNIQUE (
+    symbol,
+    halt_date,
+    halt_time,
+    reason_code,
+    market
+)
+```
+
+Des index complémentaires sont utilisés pour faciliter les recherches courantes selon les migrations appliquées.
+
+### `core.nasdaq_halt_episode`
+
+La relation RAW est protégée par :
+
+```text
+UNIQUE (trade_halt_id)
+```
+
+Des index complémentaires facilitent notamment les recherches par symbole, date/heure et raison selon le schéma appliqué.
+
+Les index supplémentaires devront être ajoutés sur la base de requêtes et volumes réels plutôt que par anticipation.
+
+---
+
+## 15. Couche analytique future
+
+Les objets analytiques PostgreSQL ne sont pas encore implémentés.
+
+Les datasets Python/CSV actuels servent de référence fonctionnelle :
+
+```text
+ticker_halt_daily.csv
+ticker_halt_metrics.csv
+ticker_halt_reason_metrics.csv
+```
+
+Les objets PostgreSQL futurs pourront éventuellement prendre la forme de vues ou vues matérialisées, mais ce choix n'est pas encore finalisé.
+
+Noms conceptuels envisagés :
+
+```text
+analytics.ticker_halt_daily
+analytics.ticker_halt_metrics
+analytics.ticker_halt_reason_metrics
+```
+
+La migration future est réservée comme :
+
+```text
+database/migrations/003_create_nasdaq_halts_analytics.sql
+```
+
+Elle ne doit pas être créée avant validation de la sémantique analytique.
+
+---
+
+## 16. Calendrier de marché
+
+Le pipeline Python actuel détermine les jours de marché selon une logique qui ne constitue pas encore un calendrier officiel complet.
+
+Avant de reproduire les métriques quotidiennes dans PostgreSQL, QuantLab devra disposer d'une représentation fiable des journées de marché.
+
+Cette exigence concerne notamment :
+
+```text
+halt_days
+halt_days_at_close
+halts_per_market_day
+```
+
+La métrique :
+
+```text
+halts_per_market_day
+```
+
+ne doit pas être considérée comme définitivement modélisée dans PostgreSQL tant que le dénominateur de jours de marché n'est pas validé.
+
+---
+
+## 17. Reconstruction des données
+
+L'architecture vise le flux reconstructible suivant :
+
+```text
+Nasdaq XML
+     |
+     v
 RAW XML local
-
-&#x20;   ↓
-
-raw.nasdaq\_trade\_halt
-
-&#x20;   ↓
-
-core.nasdaq\_halt\_episode
-
-&#x20;   ↓
-
-analytics.\*
-
+     |
+     v
+Parsing / normalisation
+     |
+     v
+raw.nasdaq_trade_halt
+     |
+     v
+core.nasdaq_halt_episode
+     |
+     v
+analytics.*
 ```
 
+Les objets analytiques futurs ne doivent pas devenir des sources indépendantes.
 
+Ils doivent pouvoir être reconstruits à partir des couches de données appropriées.
 
-Les objets analytiques ne doivent pas être considérés comme des sources de vérité indépendantes.
+Les fichiers XML originaux permettent de reconstruire les couches structurées si nécessaire.
 
+---
 
+## 18. Chargement incrémental futur
 
-Ils doivent pouvoir être supprimés et reconstruits à partir des données `core`.
+Le chemin quotidien/live devra éventuellement :
 
+1. télécharger les nouvelles données Nasdaq;
+2. conserver une source RAW appropriée;
+3. normaliser les événements;
+4. insérer uniquement les événements nouveaux;
+5. associer correctement les épisodes CORE;
+6. mettre à jour les objets analytiques nécessaires;
+7. enregistrer le résultat d'exécution;
+8. pouvoir être relancé sans créer de doublons.
 
-
-\---
-
-
-
-\# 14. Chargement incrémental
-
-
-
-Le chargement quotidien devra :
-
-
-
-1\. télécharger les nouvelles données Nasdaq;
-
-2\. conserver le fichier RAW;
-
-3\. normaliser les événements;
-
-4\. insérer uniquement les nouveaux événements;
-
-5\. reconstruire ou mettre à jour les épisodes affectés;
-
-6\. rafraîchir les objets analytiques nécessaires;
-
-7\. enregistrer le résultat de l'exécution;
-
-8\. pouvoir être relancé sans créer de doublons.
-
-
-
-L'ingestion doit donc être \*\*idempotente\*\*.
-
-
-
-\---
-
-
-
-\# 15. Validation V0.6
-
-
-
-Le modèle initial a été dérivé du dataset V0.6 existant.
-
-
-
-Résultats de validation :
-
-
+Le chemin live/current :
 
 ```text
-
-Trade Halt rows             : 744
-
-Duplicate natural keys      : 0
-
-
-
-Halt Episode rows           : 744
-
-Duplicate episode IDs       : 0
-
-Unique episode IDs          : 744
-
+nasdaq_halt_collector.py
 ```
 
+n'est pas encore considéré comme complètement intégré à l'architecture PostgreSQL V0.7.
 
+Il devra notamment être validé pour :
 
-Tests de non-régression existants :
+* la structure XML courante;
+* `Market` versus `Mkt`;
+* la stratégie de snapshots;
+* la provenance;
+* la persistance;
+* l'idempotence.
 
+---
 
+## 19. Validation V0.7
+
+Résultats actuels :
 
 ```text
+Fichiers XML               : 15
+Événements bruts           : 744
+Événements uniques         : 744
+HALT Episodes              : 744
+Tickers différents         : 235
+Lignes quotidiennes        : 322
+Jours de marché            : 10
+Durées calculables         : 742
+Clés RAW dupliquées        : 0
+```
 
+Statuts :
+
+```text
+YES       : 15
+NO        : 697
+UNKNOWN   : 2
+MULTI_DAY : 30
+TOTAL     : 744
+```
+
+Tests :
+
+```text
 QVCG : PASS
-
 BCARU: PASS
-
 ```
 
-
-
-Ces résultats constituent la baseline avant intégration PostgreSQL.
-
-
-
-\---
-
-
-
-\# 16. Points à valider sur l'historique cinq ans
-
-
-
-Le chargement de cinq années de données devra notamment confirmer :
-
-
-
-\* unicité réelle de la clé naturelle des événements;
-
-\* relation entre événements et épisodes;
-
-\* gestion des épisodes multi-jours;
-
-\* valeurs possibles de `market`;
-
-\* valeurs possibles de `reason\_code`;
-
-\* valeurs et formats de `pause\_threshold\_price`;
-
-\* présence de valeurs manquantes;
-
-\* cas où aucune reprise n'est disponible;
-
-\* cohérence des timestamps;
-
-\* gestion des changements de symbole;
-
-\* performance des index;
-
-\* volume réel de données.
-
-
-
-Le schéma pourra être ajusté avant d'être considéré comme stable pour PROD.
-
-
-
-\---
-
-
-
-\# 17. Statut
-
-
-
-Le présent modèle constitue le \*\*PostgreSQL Data Model V1.0 initial\*\* du Nasdaq Halt Collector.
-
-
-
-Il est suffisamment défini pour permettre la création de la première migration SQL :
-
-
+Persistance directe :
 
 ```text
-
-database/migrations/001\_create\_nasdaq\_halts\_schema.sql
-
+RAW  : 744
+CORE : 744
 ```
 
+Réexécution :
 
+```text
+Nouveaux RAW  : 0
+Nouveaux CORE : 0
+```
 
-La validation définitive du modèle sera effectuée après chargement et analyse de l'historique complet.
+Ces résultats constituent le baseline V0.7 avant le chargement de l'historique complet.
 
+---
 
+## 20. Points à valider sur l'historique cinq ans
 
+Le chargement de cinq années devra notamment confirmer :
+
+1. l'unicité réelle de la clé naturelle RAW;
+2. la compatibilité entre la déduplication Python et la clé PostgreSQL;
+3. la cardinalité RAW→CORE;
+4. les cas d'épisodes construits à partir de plusieurs événements;
+5. les épisodes multi-jours;
+6. les valeurs possibles de `market`;
+7. les valeurs possibles de `reason_code`;
+8. les formats de `pause_threshold_price`;
+9. les valeurs manquantes;
+10. les cas sans reprise disponible;
+11. la précision des timestamps;
+12. la sémantique des fuseaux horaires;
+13. les changements de symbole;
+14. les événements apparaissant dans plusieurs fichiers source;
+15. la stratégie de provenance nécessaire dans ces cas;
+16. la performance des index;
+17. le volume réel;
+18. l'idempotence sur le dataset complet;
+19. la validité du calendrier de marché.
+
+Le schéma pourra évoluer par de nouvelles migrations avant d'être considéré comme stable pour PROD.
+
+Les migrations déjà appliquées ne doivent pas être modifiées rétroactivement.
+
+---
+
+## 21. Migrations actuelles
+
+### Migration 001
+
+```text
+database/migrations/001_create_nasdaq_halts_schema.sql
+```
+
+Elle a créé le modèle initial RAW et CORE.
+
+Elle a été appliquée et validée en DEV.
+
+### Migration 002
+
+```text
+database/migrations/002_fix_nasdaq_halt_close_status.sql
+```
+
+Elle a remplacé :
+
+```text
+halt_at_close BOOLEAN
+```
+
+par :
+
+```text
+halt_close_status VARCHAR(20)
+```
+
+Elle a été appliquée et validée en DEV.
+
+### Migration 003
+
+Réservée pour les futurs objets analytiques :
+
+```text
+database/migrations/003_create_nasdaq_halts_analytics.sql
+```
+
+Elle n'est pas encore implémentée.
+
+---
+
+## 22. Statut
+
+Le modèle actuel constitue le :
+
+```text
+PostgreSQL Data Model V1.1
+```
+
+du Nasdaq Halt Collector.
+
+Il est :
+
+```text
+implémenté en DEV
+validé sur le baseline V0.7 de 744 événements
+non encore certifié sur l'historique cinq ans
+```
+
+Les hypothèses structurantes, particulièrement la clé naturelle RAW et la relation 1 RAW → 1 CORE, demeurent soumises à la validation historique complète.

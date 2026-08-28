@@ -14,6 +14,8 @@ Elle doit permettre :
 
 Les fichiers RAW originaux, notamment les fichiers XML du Nasdaq Halt Collector, demeurent la source de provenance permettant de reconstruire les données structurées.
 
+Les fichiers CSV générés par le pipeline Nasdaq sont des artefacts de validation, de diagnostic, de non-régression ou d'export. Ils ne constituent plus la couche d'intégration entre le traitement Nasdaq et PostgreSQL.
+
 ---
 
 ## 2. Environnement DEV
@@ -81,7 +83,7 @@ Objet initial :
 raw.nasdaq_trade_halt
 ```
 
-Les fichiers XML Nasdaq demeurent toutefois la source RAW originale et la source de provenance.
+Les fichiers XML Nasdaq demeurent la source RAW originale et la source de provenance.
 
 ### `core`
 
@@ -102,7 +104,7 @@ Le schéma existe depuis la migration initiale, mais les premiers objets analyti
 * du calendrier de marché ;
 * des épisodes multi-jours ;
 * de la logique `halt_close_status`, incluant `YES`, `NO`, `UNKNOWN` et `MULTI_DAY` ;
-* de la conformité avec les résultats Python V0.6.
+* de la conformité avec les résultats Python V0.7.
 
 La future migration consacrée aux objets analytiques Nasdaq Halts est prévue comme migration `003`, la migration `002` étant utilisée pour la correction du modèle de statut de clôture.
 
@@ -139,7 +141,7 @@ Migration :
 database/migrations/002_fix_nasdaq_halt_close_status.sql
 ```
 
-La validation du dataset V0.6 a démontré qu'une représentation booléenne du statut de clôture ne permettait pas de conserver correctement les épisodes multi-jours.
+La validation du dataset initial a démontré qu'une représentation booléenne du statut de clôture ne permettait pas de conserver correctement les épisodes multi-jours.
 
 La migration `002` remplace donc :
 
@@ -162,7 +164,9 @@ UNKNOWN
 MULTI_DAY
 ```
 
-Cette représentation préserve la sémantique du pipeline Python V0.6. Pour les épisodes multi-jours, le statut de clôture ne doit pas être réduit à une valeur booléenne au niveau de l'épisode.
+Cette représentation préserve la sémantique du pipeline Python.
+
+Pour les épisodes multi-jours, le statut de clôture ne doit pas être réduit à une valeur booléenne au niveau de l'épisode.
 
 La migration `002` a été appliquée et validée dans l'environnement PostgreSQL DEV.
 
@@ -231,18 +235,48 @@ reason_code
 market
 ```
 
-Cette clé naturelle a été validée sur le dataset V0.6 existant :
+Cette clé naturelle a été validée sur le dataset V0.7 actuel :
 
 ```text
-Lignes                         : 744
-Clés naturelles dupliquées    : 0
+Lignes                      : 744
+Clés naturelles dupliquées : 0
 ```
 
 Les champs constituant cette clé naturelle sont obligatoires dans le modèle PostgreSQL actuel.
 
-La table RAW structurée conserve également le nom du fichier source chargé dans `source_file`.
+### Provenance RAW
 
-Dans l'architecture cible, cette provenance devra permettre de relier les données structurées aux fichiers XML RAW Nasdaq originaux.
+La table RAW structurée conserve le nom du fichier XML source dans :
+
+```text
+source_file
+```
+
+Exemples :
+
+```text
+tradehalts_2026-08-03.xml
+tradehalts_2026-08-04.xml
+tradehalts_2026-08-05.xml
+```
+
+La validation V0.7 contient 744 lignes RAW réparties sur 10 fichiers XML correspondant aux journées de marché du dataset de validation.
+
+PostgreSQL ne stocke pas actuellement le contenu XML complet.
+
+Les fichiers XML originaux demeurent conservés dans le stockage RAW du collecteur et permettent la reconstruction des données structurées.
+
+Le champ `source_file` fournit le lien de provenance entre l'enregistrement structuré et son fichier source.
+
+### Clé de déduplication Python
+
+La clé utilisée actuellement par le pipeline Python V0.7 pour la déduplication des événements n'est pas identique à la clé naturelle PostgreSQL.
+
+Cette différence n'a produit aucune collision sur le dataset actuel de 744 événements.
+
+Elle devra être revalidée sur l'historique complet de cinq ans.
+
+Si cette validation révèle des différences sémantiques, le modèle de déduplication ou le modèle PostgreSQL devra être adapté avant certification de l'historique.
 
 ### Table CORE
 
@@ -250,15 +284,29 @@ Dans l'architecture cible, cette provenance devra permettre de relier les donné
 core.nasdaq_halt_episode
 ```
 
-Chaque épisode est relié à un événement RAW par :
+Chaque épisode est actuellement relié à un événement RAW par :
 
 ```text
 trade_halt_id
 ```
 
-La contrainte `UNIQUE` sur `trade_halt_id` impose actuellement une relation 1:1 entre un événement RAW et un épisode CORE.
+La contrainte `UNIQUE` sur `trade_halt_id` impose actuellement une relation :
 
-Cette relation a été validée sur les 744 événements du dataset V0.6 actuel. Elle devra être revalidée lors du chargement de l'historique complet de cinq ans.
+```text
+1 événement RAW -> 1 épisode CORE
+```
+
+Cette relation a été validée sur les 744 événements du dataset V0.7 actuel.
+
+Elle devra être revalidée lors du chargement de l'historique complet de cinq ans.
+
+Le pipeline Python peut théoriquement fusionner certains événements RAW lorsque leurs périodes se chevauchent. Le writer PostgreSQL V0.7 ne tente pas de résoudre arbitrairement une telle situation.
+
+Il exige qu'un épisode puisse être associé sans ambiguïté à exactement un événement RAW sous le modèle actuel.
+
+Une absence de correspondance ou plusieurs correspondances provoquent une erreur explicite afin de signaler que le modèle doit être revu.
+
+### Identifiant du collecteur
 
 Le champ :
 
@@ -266,7 +314,13 @@ Le champ :
 collector_episode_id
 ```
 
-conserve l'identifiant généré par le pipeline V0.6 à des fins de traçabilité. Il ne constitue pas la clé primaire PostgreSQL.
+conserve l'identifiant généré par le pipeline Python à des fins de traçabilité.
+
+Il ne constitue pas la clé primaire PostgreSQL.
+
+L'identifiant d'épisode généré actuellement est séquentiel et ne doit pas être considéré comme une identité métier durable tant que son comportement sur un historique étendu n'a pas été validé.
+
+### Statut de clôture
 
 Le champ :
 
@@ -274,9 +328,9 @@ Le champ :
 halt_close_status
 ```
 
-conserve l'état de clôture calculé par le pipeline V0.6.
+conserve l'état de clôture calculé par le pipeline Python.
 
-Distribution validée sur le dataset actuel :
+Distribution validée sur le dataset V0.7 actuel :
 
 ```text
 YES       : 15
@@ -286,14 +340,15 @@ MULTI_DAY : 30
 TOTAL     : 744
 ```
 
+### Précision temporelle
+
 Les timestamps fractionnaires provenant du Nasdaq sont préservés dans PostgreSQL.
 
-La chaîne complète suivante a été validée :
+La chaîne directe suivante a été validée :
 
 ```text
-Nasdaq
--> CSV V0.6
--> parser Python
+Nasdaq XML
+-> parser Python V0.7
 -> PostgreSQL
 ```
 
@@ -373,15 +428,180 @@ La connexion Python avec le compte applicatif DEV a été validée avec TLS cont
 
 ---
 
-## 9. Loader PostgreSQL de validation
+## 9. Persistance PostgreSQL V0.7
 
-Le loader actuel se trouve sous :
+La persistance PostgreSQL spécifique au Nasdaq Halt Collector est implémentée dans :
+
+```text
+collectors/nasdaq_halts/src/nasdaq_postgresql.py
+```
+
+Elle est appelée directement par :
+
+```text
+collectors/nasdaq_halts/src/calculate_halt_metrics.py
+```
+
+Le pipeline V0.7 transmet directement :
+
+```text
+unique_events
+episodes
+```
+
+au writer PostgreSQL.
+
+Il n'est donc plus nécessaire de relire les fichiers CSV traités afin d'alimenter PostgreSQL.
+
+### Flux actuel
+
+```text
+XML RAW
+   |
+   v
+Parsing
+   |
+   v
+unique_events
+   |
+   +------> raw.nasdaq_trade_halt
+   |
+   v
+Episode construction
+   |
+   v
+episodes
+   |
+   +------> core.nasdaq_halt_episode
+```
+
+Les CSV continuent d'être produits comme artefacts secondaires de validation et de non-régression.
+
+### Writer RAW
+
+Le writer RAW :
+
+* valide les champs nécessaires à la clé naturelle ;
+* conserve le nom du fichier XML dans `source_file` ;
+* insère les nouveaux événements ;
+* détecte les événements déjà présents par la contrainte naturelle ;
+* récupère l'identifiant PostgreSQL d'un événement existant ;
+* construit la correspondance nécessaire à la persistance CORE.
+
+La gestion des conflits repose sur la clé naturelle PostgreSQL :
+
+```text
+symbol
+halt_date
+halt_time
+reason_code
+market
+```
+
+### Writer CORE
+
+Le writer CORE :
+
+* recherche l'événement RAW source correspondant à chaque épisode ;
+* exige une correspondance unique sous le modèle 1:1 actuel ;
+* récupère le `trade_halt_id` PostgreSQL ;
+* conserve le `collector_episode_id` ;
+* conserve `halt_close_status` ;
+* insère l'épisode CORE ;
+* traite une réexécution comme un enregistrement existant plutôt qu'une duplication.
+
+### Transaction
+
+La persistance RAW et CORE est exécutée dans une même connexion transactionnelle PostgreSQL.
+
+Une erreur de persistance empêche l'exécution d'être considérée comme une persistance PostgreSQL réussie.
+
+Le code ne doit pas sélectionner arbitrairement une relation RAW→CORE lorsqu'une ambiguïté est détectée.
+
+---
+
+## 10. Validation de la persistance directe
+
+### Chargement direct après nettoyage DEV
+
+La base DEV a été nettoyée des données précédemment chargées par le loader CSV afin de valider la provenance XML réelle.
+
+Après nettoyage :
+
+```text
+RAW  : 0
+CORE : 0
+```
+
+L'exécution du pipeline V0.7 directement à partir des fichiers XML a produit :
+
+```text
+RAW inserted   : 744
+RAW existing   : 0
+CORE inserted  : 744
+CORE existing  : 0
+```
+
+Les tests de non-régression sont demeurés conformes :
+
+```text
+QVCG  : PASS
+BCARU : PASS
+```
+
+Les métriques de référence sont également demeurées inchangées.
+
+### Provenance validée
+
+Après le chargement direct, les valeurs de `source_file` correspondent aux fichiers XML historiques réels plutôt qu'au fichier CSV transitoire.
+
+La distribution validée est :
+
+```text
+tradehalts_2026-08-03.xml : 93
+tradehalts_2026-08-04.xml : 45
+tradehalts_2026-08-05.xml : 77
+tradehalts_2026-08-06.xml : 93
+tradehalts_2026-08-07.xml : 112
+tradehalts_2026-08-10.xml : 100
+tradehalts_2026-08-11.xml : 60
+tradehalts_2026-08-12.xml : 78
+tradehalts_2026-08-13.xml : 42
+tradehalts_2026-08-14.xml : 44
+```
+
+Total :
+
+```text
+744
+```
+
+### Idempotence
+
+Une exécution du pipeline contre des données déjà présentes a également validé le comportement idempotent :
+
+```text
+RAW inserted   : 0
+RAW existing   : 744
+CORE inserted  : 0
+CORE existing  : 744
+```
+
+La persistance directe V0.7 est donc idempotente sur le dataset de validation actuel.
+
+Cette propriété devra être revalidée sur l'historique complet de cinq ans.
+
+---
+
+## 11. Loader CSV transitoire
+
+Le loader historique reste disponible sous :
 
 ```text
 collectors/nasdaq_halts/src/load_postgresql.py
 ```
 
-Il charge les fichiers V0.6 suivants :
+Il charge :
 
 ```text
 data/processed/tradehalts.csv
@@ -395,71 +615,32 @@ raw.nasdaq_trade_halt
 core.nasdaq_halt_episode
 ```
 
-Ce loader constitue un mécanisme transitoire de validation et de migration. Il permet de valider le modèle PostgreSQL à partir du dataset V0.6 connu.
+Ce loader a servi à valider initialement :
 
-Il ne représente pas le pipeline de production cible.
+* la connectivité PostgreSQL ;
+* le modèle de données ;
+* les permissions du rôle applicatif ;
+* la transaction RAW/CORE ;
+* la gestion des clés naturelles ;
+* l'idempotence ;
+* la précision temporelle.
 
-### Validation du chargement
+Il est conservé comme outil de validation et de migration.
 
-Premier chargement :
+Il ne constitue pas le chemin de persistance de production.
 
-```text
-RAW inserted   : 744
-RAW existing   : 0
-CORE inserted  : 744
-CORE existing  : 0
-```
-
-Second chargement du même dataset :
-
-```text
-RAW inserted   : 0
-RAW existing   : 744
-CORE inserted  : 0
-CORE existing  : 744
-```
-
-Ce second chargement confirme l'idempotence du loader sur le dataset V0.6.
-
-Le chargement RAW et CORE est exécuté dans une transaction PostgreSQL commune. Une erreur pendant le traitement provoque l'annulation de la transaction plutôt qu'un chargement partiel.
-
-### Architecture cible
-
-Le pipeline de production ne doit pas dépendre des CSV intermédiaires.
-
-L'architecture cible est :
+Le chemin V0.7 privilégié est désormais :
 
 ```text
-Nasdaq Web / RSS
-        |
-        v
-Nasdaq Halt Collector
-        |
-        +--> XML RAW conservé
-        |
-        v
-Parsing / normalisation
-        |
-        v
-PostgreSQL RAW
-        |
-        v
-Transformation
-        |
-        v
-PostgreSQL CORE
-        |
-        v
-Analytics
+XML RAW
+-> Python
+-> PostgreSQL RAW
+-> PostgreSQL CORE
 ```
-
-Les CSV demeurent utiles comme exports, outils de diagnostic et références de non-régression, mais ne constituent pas la couche d'intégration de production entre le collecteur et PostgreSQL.
-
-L'intégration directe du collecteur avec PostgreSQL demeure donc une étape à réaliser.
 
 ---
 
-## 10. Requêtes SQL
+## 12. Requêtes SQL
 
 Les requêtes SQL réutilisables sont conservées sous :
 
@@ -481,13 +662,28 @@ get_halts_per_symbol_and_date.sql
 visualize_halts_table.sql
 ```
 
-Ces fichiers sont destinés à faciliter l'exploration, la validation et la consultation des données sans intégrer des requêtes ad hoc dans le code applicatif.
+Ces fichiers sont destinés à faciliter :
+
+* l'exploration ;
+* la validation ;
+* la consultation ;
+* le diagnostic ;
+* la vérification de provenance.
+
+La provenance des fichiers XML peut notamment être inspectée avec :
+
+```sql
+SELECT DISTINCT
+    source_file
+FROM raw.nasdaq_trade_halt
+ORDER BY source_file;
+```
 
 L'environnement DEV utilise également l'extension PostgreSQL de Visual Studio Code pour explorer les objets PostgreSQL, exécuter les fichiers SQL sauvegardés et visualiser les résultats.
 
 ---
 
-## 11. Analytics
+## 13. Analytics
 
 Les objets analytiques Nasdaq Halts ne sont pas encore créés dans PostgreSQL.
 
@@ -507,17 +703,44 @@ analytics.ticker_halt_reason_metrics
 
 Cette migration ne doit pas être créée avant validation complète de la sémantique nécessaire.
 
-Avant leur création définitive, les calculs PostgreSQL devront être comparés aux résultats du pipeline Python V0.6.
+Avant leur création définitive, les calculs PostgreSQL devront être comparés aux résultats du pipeline Python V0.7.
 
-Le calendrier de marché devra être modélisé afin d'éviter de considérer les fins de semaine et jours fériés comme des jours de marché.
+Le calendrier de marché devra être modélisé afin d'éviter de considérer incorrectement les fins de semaine et jours fériés comme des jours de marché.
 
 La logique des épisodes multi-jours et du statut de clôture devra également être reproduite sans perte de sémantique.
 
-La métrique `halts_per_market_day` demeure différée tant que le dénominateur fondé sur les jours de marché n'est pas correctement modélisé.
+La métrique :
+
+```text
+halts_per_market_day
+```
+
+demeure différée tant que le dénominateur fondé sur les jours de marché n'est pas correctement modélisé.
 
 ---
 
-## 12. Sauvegardes
+## 14. Points à revalider sur l'historique cinq ans
+
+Avant de considérer le modèle Nasdaq Halt comme stabilisé, le chargement historique complet devra notamment valider :
+
+1. l'unicité de la clé naturelle RAW ;
+2. la compatibilité entre la déduplication Python et la clé naturelle PostgreSQL ;
+3. la relation actuelle 1 RAW → 1 CORE ;
+4. les éventuels épisodes construits à partir de plusieurs événements RAW ;
+5. la stabilité et l'utilité de `collector_episode_id` ;
+6. la présence d'un même événement naturel dans plusieurs fichiers XML ;
+7. la stratégie de provenance si plusieurs fichiers contiennent le même événement ;
+8. la précision des timestamps ;
+9. la sémantique du fuseau horaire Nasdaq ;
+10. la logique des épisodes multi-jours ;
+11. le calendrier officiel des jours de marché ;
+12. l'idempotence sur le volume historique complet.
+
+Une divergence observée pendant cette validation doit conduire à une évolution explicite du modèle plutôt qu'à une correction silencieuse des données.
+
+---
+
+## 15. Sauvegardes
 
 L'environnement Azure DEV utilise actuellement la sauvegarde gérée par Azure avec une rétention de 7 jours.
 
@@ -532,7 +755,7 @@ Cette activité est suivie séparément dans le backlog QuantLab.
 
 ---
 
-## 13. Sécurité
+## 16. Sécurité
 
 Principes actuels :
 

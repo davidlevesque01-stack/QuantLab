@@ -6,13 +6,15 @@ from datetime import datetime, date, time, timedelta
 from collections import defaultdict
 from statistics import median
 
+from collectors.nasdaq_halts.src.nasdaq_postgresql import persist_nasdaq_halts
+
 
 # ============================================================
 # QUANTLAB - NASDAQ HALT METRICS
-# VERSION 0.6
+# VERSION 0.7
 # ============================================================
 
-VERSION = "0.6"
+VERSION = "0.7"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -207,6 +209,7 @@ def parse_xml_file(xml_file):
             "resumption_quote_time": resumption_quote_time,
             "resumption_trade_time": resumption_trade_time,
             "pause_threshold_price": pause_threshold,
+            "source_file": xml_file.name,
             "halt_start": halt_start,
             "halt_end": halt_end,
         })
@@ -611,7 +614,17 @@ for episode in episodes:
 
 
 # ============================================================
-# 6. NIVEAU 1 - TRADEHALTS
+# 6. PERSISTANCE POSTGRESQL
+# ============================================================
+
+persist_nasdaq_halts(
+    unique_events,
+    episodes
+)
+
+
+# ============================================================
+# 7. NIVEAU 1 - TRADEHALTS
 # ============================================================
 
 with TRADEHALTS_FILE.open(
@@ -654,7 +667,7 @@ with TRADEHALTS_FILE.open(
 
 
 # ============================================================
-# 7. NIVEAU 2 - HALT EPISODES
+# 8. NIVEAU 2 - HALT EPISODES
 # ============================================================
 
 with EPISODES_FILE.open(
@@ -693,7 +706,7 @@ with EPISODES_FILE.open(
 
 
 # ============================================================
-# 8. NIVEAU 3 - DAILY
+# 9. NIVEAU 3 - DAILY
 # ============================================================
 
 daily = defaultdict(list)
@@ -888,7 +901,7 @@ with DAILY_FILE.open(
 
 
 # ============================================================
-# 9. NIVEAU 4 - TICKER METRICS V0.6
+# 10. NIVEAU 4 - TICKER METRICS V0.7
 # ============================================================
 
 episodes_by_symbol = defaultdict(list)
@@ -986,7 +999,7 @@ for symbol in sorted(
 
 
     # --------------------------------------------------------
-    # V0.6
+    # V0.7
     #
     # Nombre moyen de HALT par jour avec HALT
     # --------------------------------------------------------
@@ -1007,7 +1020,7 @@ for symbol in sorted(
 
 
     # --------------------------------------------------------
-    # V0.6
+    # V0.7
     #
     # Nombre moyen de HALT par jour de marché
     # --------------------------------------------------------
@@ -1187,7 +1200,7 @@ with TICKER_METRICS_FILE.open(
 
 
 # ============================================================
-# 10. NIVEAU 5 - REASON METRICS
+# 11. NIVEAU 5 - REASON METRICS
 # ============================================================
 
 reason_data = defaultdict(list)
@@ -1295,7 +1308,7 @@ with REASON_METRICS_FILE.open(
 
 
 # ============================================================
-# 11. TEST DE NON-RÉGRESSION - QVCG
+# 12. TEST DE NON-RÉGRESSION - QVCG
 # ============================================================
 
 print()
@@ -1422,7 +1435,7 @@ else:
 
 
 # ============================================================
-# 12. TEST DE NON-RÉGRESSION - BCARU
+# 13. TEST DE NON-RÉGRESSION - BCARU
 # ============================================================
 
 print()
@@ -1536,7 +1549,7 @@ else:
 
 
 # ============================================================
-# 13. VALIDATION FINALE
+# 14. VALIDATION FINALE
 # ============================================================
 
 print()

@@ -28,3 +28,8 @@ SELECT *
 FROM core.nasdaq_halt_episode
 WHERE halt_close_status = 'MULTI_DAY'
 ORDER BY halt_start DESC;
+
+SELECT DISTINCT
+    source_file
+FROM raw.nasdaq_trade_halt
+ORDER BY source_file;
