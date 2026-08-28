@@ -627,7 +627,10 @@ def main():
             days=1
         )
 
-        if current_date <= args.end_date:
+        if (
+            result == "downloaded"
+            and current_date <= args.end_date
+        ):
             print()
             print(
                 f"Pause de "
