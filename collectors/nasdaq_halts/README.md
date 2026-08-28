@@ -10,6 +10,8 @@ The component:
 
 - retrieves historical and live Nasdaq trading halt data;
 - preserves the original Nasdaq XML source files;
+- supports resumable historical acquisition over explicit date ranges;
+- validates historical XML before accepting it into the RAW layer;
 - parses and normalizes halt events through a shared XML parser;
 - deduplicates events;
 - builds logical halt episodes through a shared episode builder;
@@ -27,9 +29,28 @@ Current integration version:
 V0.8
 ```
 
+Current historical acquisition version:
+
+```text
+V0.4
+```
+
 V0.8 extends the validated V0.7 PostgreSQL architecture to the live/current Nasdaq acquisition path.
 
 The historical metric calculation remains V0.7 and continues to reproduce the validated V0.6 metric behavior.
+
+Historical acquisition V0.4 prepares the collector for controlled multi-year backfill by adding:
+
+- explicit command-line start and end dates;
+- range-specific checkpoints;
+- resumable execution;
+- detection of existing RAW XML files;
+- retry handling;
+- XML validation before persistence;
+- atomic XML writes;
+- atomic checkpoint writes;
+- explicit tracking of failed dates;
+- protection against future end dates.
 
 V0.8 adds:
 
@@ -94,6 +115,14 @@ This confirms that the V0.8 update logic does not modify the validated historica
 
 Live PostgreSQL persistence has also been validated successfully.
 
+Historical acquisition V0.4 has been validated against:
+
+- an existing-file date range;
+- a non-market day returning a valid empty Nasdaq RSS document;
+- a market day containing actual halt records;
+- the shared XML parser;
+- checkpoint-based restart without an additional network request.
+
 The complete five-year historical dataset has not yet been loaded or certified.
 
 ## Components
@@ -118,9 +147,54 @@ Current scripts and modules:
 
 ### `nasdaq_historical_collector.py`
 
+Current historical acquisition version:
+
+```text
+V0.4
+```
+
 Acquires historical Nasdaq XML files on a date-by-date basis and preserves them under the local RAW data layer.
 
-The historical collector remains focused on acquisition.
+The historical collector remains focused on acquisition. It does not write directly to PostgreSQL.
+
+V0.4 accepts an explicit date range and maintains a checkpoint specific to that range.
+
+Historical XML files are stored as:
+
+```text
+data/raw/nasdaq/historical/tradehalts_YYYY-MM-DD.xml
+```
+
+Checkpoint files are stored as:
+
+```text
+logs/historical_progress_STARTDATE_ENDDATE.json
+```
+
+For example:
+
+```text
+historical_progress_2026-08-03_2026-08-05.json
+```
+
+The checkpoint records:
+
+- collector version;
+- requested start date;
+- requested end date;
+- last completed date;
+- successfully downloaded day count;
+- existing-file day count;
+- cumulative failed attempt count;
+- currently failed dates.
+
+Existing historical XML files are preserved and are not downloaded again.
+
+New downloads are XML-validated before being accepted.
+
+Both XML files and checkpoint updates use temporary files followed by replacement so that incomplete writes are not accepted as completed artifacts.
+
+A failed date stops the current run rather than advancing the checkpoint past the failure.
 
 ### `calculate_halt_metrics.py`
 
@@ -297,18 +371,89 @@ docs/database.md
 docs/installation.md
 ```
 
+## Historical Acquisition
+
+Historical acquisition is performed separately from historical processing.
+
+From the QuantLab monorepo root:
+
+```text
+C:\QuantLab\QuantLab
+```
+
+run:
+
+```powershell
+python -m collectors.nasdaq_halts.src.nasdaq_historical_collector `
+  --start-date YYYY-MM-DD `
+  --end-date YYYY-MM-DD
+```
+
+Example:
+
+```powershell
+python -m collectors.nasdaq_halts.src.nasdaq_historical_collector `
+  --start-date 2026-08-03 `
+  --end-date 2026-08-05
+```
+
+Optional parameters are:
+
+```text
+--delay-seconds
+--max-retries
+--retry-delay-seconds
+```
+
+Current defaults are:
+
+```text
+delay between dates : 5 seconds
+maximum attempts    : 3
+retry delay         : 10 seconds
+```
+
+Retry delay increases with the attempt number.
+
+For example, with the default retry delay:
+
+```text
+after attempt 1 : 10 seconds
+after attempt 2 : 20 seconds
+```
+
+The collector iterates over calendar dates intentionally.
+
+A valid Nasdaq RSS document containing zero halt events is accepted as a successful RAW acquisition. This permits weekends and other dates with no halt records to remain part of the acquisition range without being treated as errors.
+
+Market-calendar semantics are handled separately during analytical validation and must not be inferred from the presence or absence of a RAW XML file.
+
+### Resume Behavior
+
+Each requested range has its own checkpoint.
+
+If a run is interrupted after a completed date, rerunning the same command resumes with the next date.
+
+If the checkpoint already indicates that the end date has been completed, the collector exits without issuing another Nasdaq request.
+
+If an XML file already exists for a date reached during acquisition, the file is preserved and counted as existing rather than downloaded again.
+
+The existing file is currently trusted as an already acquired RAW artifact. Full historical validation must independently verify the integrity and parseability of the complete RAW archive.
+
 ## Historical Data Flow
 
-The historical processing path is:
+The historical path is:
 
 ```text
 Nasdaq Trader
       |
       v
-Historical Collector
+Historical Collector V0.4
+      |
+      +----> Range-specific checkpoint
       |
       v
-Immutable RAW XML
+Validated immutable RAW XML
       |
       v
 Shared XML Parser
@@ -335,6 +480,10 @@ Daily / Metrics
    v
 Derived CSV
 ```
+
+The historical collector is responsible only for acquisition through the RAW XML layer.
+
+PostgreSQL persistence occurs in the historical processing pipeline after parsing, normalization and deduplication.
 
 Processed CSV files are not required as the integration layer between the historical processor and PostgreSQL.
 
@@ -519,19 +668,15 @@ The sequential `collector_episode_id` is not treated as a persistent business id
 
 ## Running Historical Processing
 
-From the QuantLab monorepo root:
+Historical acquisition and historical processing are separate operations.
 
-```text
-C:\QuantLab\QuantLab
-```
-
-activate the virtual environment and run:
+After the required RAW XML files have been acquired, run from the QuantLab monorepo root:
 
 ```powershell
 python -m collectors.nasdaq_halts.src.calculate_halt_metrics
 ```
 
-PostgreSQL connection environment variables must be configured before execution.
+PostgreSQL connection environment variables must be configured before historical processing.
 
 The detailed workstation and database setup procedure is documented in:
 
@@ -556,6 +701,59 @@ inserted
 updated
 unchanged
 ```
+
+## V0.4 Historical Acquisition Validation
+
+Historical acquisition V0.4 was validated before beginning the five-year backfill.
+
+### Existing RAW Files
+
+A controlled range containing three already existing XML files produced:
+
+```text
+New downloads : 0
+Existing files: 3
+Failures      : 0
+```
+
+The resulting range-specific checkpoint correctly recorded the final completed date.
+
+### Empty Historical Date
+
+A historical request for a date with no halt events returned a valid Nasdaq RSS XML document.
+
+The file passed XML validation and the shared parser returned:
+
+```text
+Events: 0
+```
+
+This confirms that an empty but well-formed Nasdaq RSS document is a valid RAW acquisition result.
+
+### Historical Market Date
+
+A historical request for a market date returned a valid XML document and the shared parser produced:
+
+```text
+Events: 67
+```
+
+The historical XML was observed to contain consolidated final information for examined halt records.
+
+For example, a tested LUDP halt contained its final resumption trade time in the historical XML rather than requiring the historical collector to reconstruct successive website observations.
+
+Reason-code distinctions remain significant and are preserved by the current PostgreSQL natural key.
+
+### Checkpoint Idempotence
+
+Rerunning a completed one-day range produced:
+
+```text
+COLLECTE DÉJÀ COMPLÈTE
+Aucune nouvelle requête effectuée.
+```
+
+This validates checkpoint-based acquisition idempotence for the tested range.
 
 ## V0.8 Validation
 
@@ -641,9 +839,9 @@ after execution.
 The first validated V0.8 live PostgreSQL execution processed:
 
 ```text
-Raw events        : 35
-Unique events     : 35
-HALT episodes     : 35
+Raw events           : 35
+Unique events        : 35
+HALT episodes        : 35
 Calculated durations : 23
 ```
 
@@ -727,11 +925,20 @@ including:
 
 ```text
 data/raw/
+data/raw/nasdaq/historical/
 data/raw/nasdaq/live/
 data/processed/
 ```
 
 These directories are excluded from Git.
+
+Historical acquisition checkpoints are stored under:
+
+```text
+collectors/nasdaq_halts/logs/
+```
+
+and are also excluded from Git.
 
 The historical pre-monorepo project remains temporarily available at:
 
@@ -747,6 +954,8 @@ It should not be treated as the active QuantLab codebase.
 
 Before the Nasdaq Halt data model is considered stable, the five-year historical validation must examine:
 
+- RAW archive completeness;
+- XML integrity and parseability across the full range;
 - RAW natural-key uniqueness;
 - Python versus PostgreSQL deduplication;
 - RAW-to-CORE cardinality;

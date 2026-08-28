@@ -4,7 +4,7 @@
 
 **Version : V0.8**
 **Statut : Architecture de référence du collecteur Nasdaq Halts**
-**Dernière mise à jour : 2026-08-28**
+**Dernière mise à jour : 2026-08-29**
 
 ---
 
@@ -20,19 +20,28 @@ L'architecture générale de la plateforme est documentée dans :
 
 Le composant Nasdaq Halts assure actuellement :
 
-- la collecte historique et live des données Nasdaq Trading Halts;
+- la collecte historique et live des Nasdaq Trading Halts;
 - la conservation des fichiers XML RAW;
-- la création de snapshots live XML immuables;
-- le parsing et la normalisation via un parser commun;
+- la collecte historique robuste et reprenable par plage de dates;
+- le parsing et la normalisation;
 - la déduplication;
-- la construction des épisodes HALT via un module commun;
-- la persistance directe PostgreSQL RAW et CORE;
-- l'enrichissement des HALT live lorsque Nasdaq complète l'information;
-- la protection contre la régression de données déjà connues;
-- la production de datasets CSV dérivés;
-- le calcul des métriques historiques;
-- les tests de non-régression;
-- les tests d'intégration PostgreSQL.
+- la construction des épisodes HALT;
+- la persistance PostgreSQL RAW et CORE;
+- la production de datasets CSV de validation;
+- le calcul des métriques;
+- les tests de non-régression et d'intégration.
+
+La version d'intégration globale actuelle est :
+
+```text
+V0.8
+```
+
+La version actuelle du collecteur historique est :
+
+```text
+V0.4
+```
 
 ---
 
@@ -59,10 +68,8 @@ collectors/nasdaq_halts/
 |   |   +-- nasdaq/
 |   |       +-- historical/
 |   |       |   +-- tradehalts_YYYY-MM-DD.xml
-|   |       |
 |   |       +-- live/
 |   |       |   +-- tradehalts_live_YYYYMMDDTHHMMSSZ.xml
-|   |       |
 |   |       +-- latest_tradehalts.xml
 |   |
 |   +-- processed/
@@ -72,6 +79,9 @@ collectors/nasdaq_halts/
 |       +-- ticker_halt_metrics.csv
 |       +-- ticker_halt_reason_metrics.csv
 |       +-- live_tradehalts.csv
+|
++-- logs/
+|   +-- historical_progress_STARTDATE_ENDDATE.json
 |
 +-- docs/
 |   +-- ARCHITECTURE.md
@@ -90,69 +100,101 @@ collectors/nasdaq_halts/
     +-- nasdaq_xml.py
 ```
 
-Le test d'intégration PostgreSQL live se trouve sous :
-
-```text
-tests/integration/test_nasdaq_postgresql_live_update.py
-```
-
 Les répertoires de données RAW, processed et logs sont locaux et exclus de Git.
 
 ---
 
-## 3. Architecture logique V0.8
+## 3. Architecture logique
 
-La V0.8 utilise maintenant des composants communs pour les chemins historique et live.
-
-Architecture générale :
+### 3.1 Historique
 
 ```text
-                         NASDAQ TRADER
-                        /             \
-                       /               \
-                      v                 v
-             Historical Source       Live RSS
-                      |                 |
-                      v                 v
-             Historical Collector   Live Collector
-                      |                 |
-                      v                 v
-             Historical RAW XML     Immutable Live
-                                    RAW Snapshot
-                      \                 /
-                       \               /
-                        v             v
-                       Shared XML Parser
-                              |
-                              v
-                         Normalized
-                           Events
-                              |
-                              v
-                    Shared Deduplication
-                              |
-                              v
-                        unique_events
-                         /         \
-                        /           \
-                       v             v
-              PostgreSQL RAW     Derived CSV
+                  NASDAQ TRADER
                        |
+                       | RSS XML historique
                        v
-               Shared Episode Builder
-                       |
-                       v
-                    episodes
-                    /     \
-                   /       \
-                  v         v
-         PostgreSQL CORE   Historical
-                           Daily / Metrics
+              +-------------------+
+              | Historical        |
+              | Collector V0.4    |
+              +---------+---------+
+                        |
+              +---------+---------+
+              |                   |
+              v                   v
+       RAW XML historique     Checkpoint
+       immutable              par plage
+              |
+              v
+        nasdaq_xml.py
+              |
+              v
+   nasdaq_deduplication.py
+              |
+              v
+         unique_events
+          /          \
+         v            v
+ PostgreSQL RAW    CSV tradehalts
+         |
+         v
+  nasdaq_episodes.py
+         |
+         v
+       episodes
+      /        \
+     v          v
+PostgreSQL    CSV
+   CORE       halt_episodes
+                |
+                v
+         Daily / Metrics
+                |
+       +--------+--------+
+       |        |        |
+       v        v        v
+     daily    ticker   reason
+      CSV     metrics   metrics
+```
+
+### 3.2 Live
+
+```text
+Nasdaq RSS
+    |
+    v
+Live Collector V0.8
+    |
+    v
+Immutable XML Snapshot
+    |
+    +----> latest_tradehalts.xml
+    |
+    v
+nasdaq_xml.py
+    |
+    v
+nasdaq_deduplication.py
+    |
+    v
+unique_events
+    |
+    +----> PostgreSQL RAW
+    |
+    v
+nasdaq_episodes.py
+    |
+    v
+episodes
+    |
+    +----> PostgreSQL CORE
+    |
+    v
+live_tradehalts.csv
 ```
 
 Le chemin PostgreSQL ne dépend pas des CSV processed.
 
-Les CSV sont des sorties secondaires utilisées pour :
+Les CSV sont conservés comme sorties secondaires pour :
 
 - validation;
 - diagnostic;
@@ -163,22 +205,75 @@ Les CSV sont des sorties secondaires utilisées pour :
 
 ---
 
-## 4. Couche de collecte
+## 4. Couche de collecte historique V0.4
 
-### 4.1 `nasdaq_historical_collector.py`
+Module :
+
+```text
+src/nasdaq_historical_collector.py
+```
+
+Version :
+
+```text
+V0.4
+```
+
+Le collecteur historique est exclusivement responsable de l'acquisition des XML RAW.
+
+Il ne persiste pas directement les événements dans PostgreSQL.
 
 Responsabilités :
 
+- recevoir une plage de dates explicite;
 - interroger la source historique Nasdaq;
 - télécharger les données journée par journée;
 - sauvegarder un fichier XML par date;
-- éviter de télécharger inutilement un fichier déjà présent;
-- gérer les erreurs de collecte;
-- permettre une reprise après interruption;
-- utiliser un délai entre les requêtes;
-- maintenir l'état de progression de la collecte.
+- détecter les fichiers RAW déjà présents;
+- éviter les téléchargements inutiles;
+- valider syntaxiquement le XML reçu;
+- écrire les XML de façon atomique;
+- gérer les tentatives de reprise réseau;
+- arrêter la collecte sur une date en échec;
+- maintenir un checkpoint spécifique à la plage;
+- écrire le checkpoint de façon atomique;
+- reprendre une collecte interrompue;
+- protéger contre une date de fin future.
 
-Format historique :
+### 4.1 Interface de commande
+
+Exécution :
+
+```powershell
+python -m collectors.nasdaq_halts.src.nasdaq_historical_collector `
+  --start-date YYYY-MM-DD `
+  --end-date YYYY-MM-DD
+```
+
+Paramètres obligatoires :
+
+```text
+--start-date
+--end-date
+```
+
+Paramètres optionnels :
+
+```text
+--delay-seconds
+--max-retries
+--retry-delay-seconds
+```
+
+Valeurs par défaut actuelles :
+
+```text
+delay-seconds       : 5
+max-retries         : 3
+retry-delay-seconds : 10
+```
+
+### 4.2 Format RAW historique
 
 ```text
 tradehalts_YYYY-MM-DD.xml
@@ -187,40 +282,8 @@ tradehalts_YYYY-MM-DD.xml
 Exemple :
 
 ```text
-tradehalts_2026-08-10.xml
+tradehalts_2026-08-17.xml
 ```
-
-Les fichiers historiques sont conservés afin de permettre la reconstruction des données structurées.
-
-### 4.2 `nasdaq_halt_collector.py`
-
-Le chemin live est intégré à l'architecture PostgreSQL depuis la V0.8.
-
-Responsabilités :
-
-1. télécharger le flux RSS Nasdaq courant;
-2. conserver un snapshot XML immuable horodaté;
-3. mettre à jour une copie pratique `latest_tradehalts.xml`;
-4. parser le snapshot avec le parser commun;
-5. dédupliquer les événements;
-6. construire les HALT Episodes;
-7. persister directement RAW et CORE dans PostgreSQL;
-8. produire un CSV live optionnel;
-9. afficher les compteurs de persistance.
-
-Exécution de référence :
-
-```powershell
-python -m collectors.nasdaq_halts.src.nasdaq_halt_collector
-```
-
-Le CSV live ne constitue pas un intermédiaire de persistance.
-
----
-
-## 5. Couche RAW — provenance
-
-### 5.1 Historique
 
 Répertoire :
 
@@ -228,13 +291,216 @@ Répertoire :
 data/raw/nasdaq/historical/
 ```
 
+### 4.3 Validation XML
+
+Un nouveau téléchargement doit :
+
+1. contenir des données;
+2. être un document XML bien formé;
+3. passer la validation XML avant d'être accepté comme RAW.
+
+Un RSS Nasdaq bien formé contenant zéro HALT est valide.
+
+Le nombre d'événements n'est donc pas utilisé comme critère de succès de l'acquisition.
+
+Cette distinction permet de traiter correctement :
+
+- fins de semaine;
+- jours sans HALT;
+- autres dates où Nasdaq retourne un RSS valide sans événement.
+
+### 4.4 Écriture atomique
+
+Un nouveau XML est d'abord écrit dans un fichier temporaire :
+
+```text
+*.xml.tmp
+```
+
+puis remplacé vers son nom définitif uniquement après validation.
+
+Le checkpoint utilise le même principe :
+
+```text
+*.json.tmp
+```
+
+puis remplacement atomique.
+
+Le système évite ainsi de considérer une écriture partielle comme un artefact complété.
+
+### 4.5 Fichiers existants
+
+Lorsqu'un fichier historique existe déjà pour une date :
+
+- aucune nouvelle requête Nasdaq n'est effectuée pour cette date;
+- le fichier n'est pas remplacé;
+- la date est comptabilisée comme existante;
+- le checkpoint peut avancer.
+
+Le fichier existant est actuellement considéré comme un RAW déjà acquis.
+
+Son intégrité complète sera vérifiée indépendamment lors de la validation cinq ans.
+
+---
+
+## 5. Checkpoint historique V0.4
+
+Chaque plage de collecte possède son propre checkpoint.
+
 Format :
 
 ```text
-tradehalts_YYYY-MM-DD.xml
+logs/historical_progress_STARTDATE_ENDDATE.json
 ```
 
-### 5.2 Live
+Exemple :
+
+```text
+historical_progress_2026-08-03_2026-08-05.json
+```
+
+Cette stratégie évite qu'un ancien checkpoint associé à une autre plage provoque un saut incorrect de dates.
+
+### 5.1 Structure
+
+Le checkpoint contient :
+
+```text
+version
+start_date
+end_date
+last_completed_date
+successful_days
+existing_days
+failed_days
+failed_dates
+```
+
+Exemple conceptuel :
+
+```json
+{
+    "version": "0.4",
+    "start_date": "2026-08-03",
+    "end_date": "2026-08-05",
+    "last_completed_date": "2026-08-05",
+    "successful_days": 0,
+    "existing_days": 3,
+    "failed_days": 0,
+    "failed_dates": []
+}
+```
+
+### 5.2 Sémantique
+
+`successful_days` :
+
+```text
+nombre de nouvelles dates téléchargées avec succès
+```
+
+`existing_days` :
+
+```text
+nombre de dates dont le RAW existait déjà lorsque la plage a été parcourue
+```
+
+`failed_days` :
+
+```text
+compteur cumulatif des échecs de collecte
+```
+
+`failed_dates` :
+
+```text
+liste des dates actuellement considérées en échec
+```
+
+Lorsqu'une date précédemment en échec réussit ultérieurement, elle est retirée de `failed_dates`.
+
+Le compteur `failed_days` demeure cumulatif.
+
+### 5.3 Reprise
+
+Si :
+
+```text
+last_completed_date = 2026-08-17
+```
+
+la prochaine date est :
+
+```text
+2026-08-18
+```
+
+Si cette prochaine date dépasse `end_date`, le collecteur termine avec :
+
+```text
+COLLECTE DÉJÀ COMPLÈTE
+```
+
+et aucune nouvelle requête Nasdaq n'est effectuée.
+
+### 5.4 Gestion des échecs
+
+Une date en échec :
+
+- est enregistrée dans le checkpoint;
+- incrémente le compteur cumulatif;
+- interrompt le traitement de la plage;
+- n'est pas dépassée silencieusement.
+
+Le système évite ainsi de créer artificiellement une plage déclarée complète contenant un trou connu.
+
+---
+
+## 6. Stratégie de retry historique
+
+Pour chaque date nécessitant un téléchargement, le collecteur peut effectuer plusieurs tentatives.
+
+Valeur par défaut :
+
+```text
+3 tentatives
+```
+
+Le délai de retry est progressif.
+
+Avec :
+
+```text
+retry-delay-seconds = 10
+```
+
+les délais après échec sont notamment :
+
+```text
+tentative 1 -> 10 secondes
+tentative 2 -> 20 secondes
+```
+
+Après la dernière tentative infructueuse, la date est déclarée en échec.
+
+Le collecteur ne poursuit pas automatiquement vers la date suivante.
+
+---
+
+## 7. Couche RAW — provenance
+
+### 7.1 Historique
+
+Répertoire :
+
+```text
+data/raw/nasdaq/historical/
+```
+
+Les XML historiques constituent les artefacts RAW originaux permettant la reconstruction des données structurées.
+
+### 7.2 Live
 
 Répertoire :
 
@@ -248,14 +514,6 @@ Chaque collecte live crée un snapshot immuable :
 tradehalts_live_YYYYMMDDTHHMMSSZ.xml
 ```
 
-Le timestamp du nom de fichier est UTC.
-
-Exemple validé :
-
-```text
-tradehalts_live_20260828T205115Z.xml
-```
-
 Le collecteur maintient également :
 
 ```text
@@ -266,7 +524,7 @@ Ce fichier est une copie pratique du dernier flux reçu.
 
 Il n'est pas le fichier de provenance immuable.
 
-### 5.3 Règles RAW
+### 7.3 Règles RAW
 
 1. ne pas modifier manuellement les XML;
 2. ne pas remplacer un fichier historique valide sans raison documentée;
@@ -276,7 +534,7 @@ Il n'est pas le fichier de provenance immuable.
 6. considérer les données structurées comme reconstruisibles à partir des XML;
 7. considérer les CSV comme des données dérivées.
 
-### 5.4 Provenance PostgreSQL
+### 7.4 Provenance PostgreSQL
 
 Chaque événement normalisé reçoit :
 
@@ -293,7 +551,7 @@ raw.nasdaq_trade_halt.source_file
 Pour un événement historique :
 
 ```text
-tradehalts_2026-08-03.xml
+tradehalts_2026-08-17.xml
 ```
 
 Pour un événement live :
@@ -302,7 +560,7 @@ Pour un événement live :
 tradehalts_live_20260828T205115Z.xml
 ```
 
-Dans la V0.8, `source_file` conserve le **premier snapshot ayant créé l'événement RAW**.
+Dans la V0.8, `source_file` conserve le premier snapshot ayant créé l'événement RAW.
 
 Une observation ultérieure du même événement peut enrichir les données PostgreSQL sans remplacer ce `source_file`.
 
@@ -318,7 +576,7 @@ PostgreSQL ne contient pas actuellement le contenu XML complet.
 
 ---
 
-## 6. Parser XML commun
+## 8. Parser XML commun
 
 Module :
 
@@ -345,29 +603,11 @@ Historical XML : Mkt
 Live XML       : Market
 ```
 
-La validation du flux live réel a confirmé l'utilisation de :
-
-```text
-Market
-```
-
 Les timestamps fractionnaires sont préservés.
-
-Exemple :
-
-```text
-15:55:18.200
-```
-
-devient :
-
-```text
-2026-08-28 15:55:18.200000
-```
 
 ---
 
-## 7. Déduplication commune
+## 9. Déduplication commune
 
 Module :
 
@@ -399,7 +639,7 @@ reason_code
 market
 ```
 
-Baseline historique :
+Baseline historique initiale :
 
 ```text
 744 événements bruts
@@ -415,13 +655,21 @@ Un snapshot live réel a également été vérifié :
 0 clé naturelle dupliquée
 ```
 
-Les doublons apparents observés sur la présentation Web Nasdaq n'étaient donc pas présents comme doublons de clé naturelle dans le RSS XML validé.
+La collecte historique du 17 août 2026 a montré que le RSS historique peut contenir une représentation consolidée d'un HALT là où l'affichage Web Nasdaq présente plusieurs états.
 
-Si plusieurs observations d'un même HALT naturel apparaissent un jour dans un seul snapshot RSS, la stratégie de déduplication live devra être revue explicitement.
+La validation observée ne justifie pas de fusionner des événements ayant des `reason_code` différents.
+
+La clé naturelle PostgreSQL continue donc d'inclure :
+
+```text
+reason_code
+```
+
+Cette hypothèse devra être revalidée statistiquement sur les cinq ans.
 
 ---
 
-## 8. Construction commune des épisodes
+## 10. Construction commune des épisodes
 
 Module :
 
@@ -465,7 +713,7 @@ Ils ne sont pas considérés comme des identités métier durables.
 
 ---
 
-## 9. Pipeline historique
+## 11. Pipeline historique de traitement
 
 ### `calculate_halt_metrics.py`
 
@@ -475,7 +723,7 @@ Version fonctionnelle actuelle :
 V0.7
 ```
 
-Le pipeline historique utilise désormais les composants communs V0.8.
+Le pipeline historique utilise les composants communs V0.8.
 
 Responsabilités :
 
@@ -489,7 +737,7 @@ Responsabilités :
 8. calculer les métriques;
 9. exécuter les tests de non-régression.
 
-Exécution de référence :
+Exécution :
 
 ```powershell
 python -m collectors.nasdaq_halts.src.calculate_halt_metrics
@@ -506,7 +754,7 @@ Une erreur PostgreSQL provoque l'échec de l'exécution plutôt qu'un contournem
 
 ---
 
-## 10. Pipeline live V0.8
+## 12. Pipeline live V0.8
 
 Le pipeline live validé est :
 
@@ -550,7 +798,7 @@ Il n'est pas requis par PostgreSQL.
 
 ---
 
-## 11. Persistance PostgreSQL V0.8
+## 13. Persistance PostgreSQL V0.8
 
 ### `nasdaq_postgresql.py`
 
@@ -604,9 +852,9 @@ Cette clé est protégée par une contrainte UNIQUE.
 
 ---
 
-## 12. Sémantique d'UPDATE V0.8
+## 14. Sémantique d'UPDATE V0.8
 
-La V0.8 doit supporter l'évolution naturelle d'un HALT live.
+La V0.8 supporte l'évolution naturelle d'un HALT live.
 
 Exemple :
 
@@ -620,7 +868,7 @@ même HALT
 resumption_trade_time = 10:05:00
 ```
 
-Le second snapshot doit enrichir la ligne existante et non créer un doublon.
+Le second snapshot enrichit la ligne existante au lieu de créer un doublon.
 
 ### Règles générales
 
@@ -640,8 +888,6 @@ DB value A + incoming A
 DB value A + incoming value B
 -> UPDATE avec B
 ```
-
-Cette dernière règle permet de prendre en compte une correction Nasdaq non-NULL.
 
 ### Champs RAW enrichissables
 
@@ -669,7 +915,7 @@ Il conserve le premier snapshot ayant créé l'événement structuré.
 
 ---
 
-## 13. Sémantique CORE V0.8
+## 15. Sémantique CORE V0.8
 
 Les informations CORE peuvent être enrichies lorsque le HALT évolue.
 
@@ -712,7 +958,7 @@ Après l'insertion initiale, il n'est donc pas remplacé lors d'une mise à jour
 
 ---
 
-## 14. Relation RAW → CORE
+## 16. Relation RAW → CORE
 
 Le modèle actuel impose :
 
@@ -726,14 +972,14 @@ via la contrainte UNIQUE sur :
 core.nasdaq_halt_episode.trade_halt_id
 ```
 
-Cette relation est validée sur :
+Cette relation a été validée sur :
 
 ```text
 744 événements historiques
 744 épisodes historiques
 ```
 
-et sur le snapshot live validé :
+et sur le snapshot live de référence :
 
 ```text
 35 événements
@@ -748,13 +994,11 @@ Un épisode doit correspondre sans ambiguïté à exactement un événement RAW.
 
 Dans le cas contraire, le traitement échoue explicitement.
 
-Le code ne doit pas sélectionner arbitrairement un événement RAW.
-
 Cette relation devra être revalidée sur l'historique complet de cinq ans.
 
 ---
 
-## 15. Transaction PostgreSQL
+## 17. Transaction PostgreSQL
 
 La persistance :
 
@@ -789,7 +1033,7 @@ Le système évite ainsi de valider silencieusement une persistance partielle.
 
 ---
 
-## 16. Couche PROCESSED
+## 18. Couche PROCESSED
 
 Répertoire :
 
@@ -817,9 +1061,7 @@ ticker_halt_reason_metrics.csv
 live_tradehalts.csv
 ```
 
-Le CSV live représente le dernier lot normalisé exporté.
-
-Il est destiné à :
+Le CSV live est destiné à :
 
 - inspection;
 - diagnostic;
@@ -836,7 +1078,7 @@ docs/METRICS_SPECIFICATION.md
 
 ---
 
-## 17. Loader CSV transitoire
+## 19. Loader CSV transitoire
 
 Module :
 
@@ -872,7 +1114,7 @@ XML RAW
 
 ---
 
-## 18. Configuration
+## 20. Configuration
 
 ### `config/config.json`
 
@@ -894,23 +1136,24 @@ QUANTLAB_DB_PASSWORD
 
 Le mot de passe ne doit jamais être versionné.
 
-### État historique
+### Acquisition historique
 
-Le collecteur historique maintient notamment :
+Les dates de collecte ne sont plus codées en dur.
+
+Elles sont fournies explicitement par :
 
 ```text
-last_completed_date
-successful_days
-failed_days
+--start-date
+--end-date
 ```
 
-Cet état appartient à la couche d'acquisition.
+Le délai entre dates et la stratégie de retry peuvent également être contrôlés par la ligne de commande.
 
 ---
 
-## 19. Principes d'architecture
+## 21. Principes d'architecture
 
-### 19.1 Provenance
+### 21.1 Provenance
 
 ```text
 XML RAW original = provenance / reconstruction
@@ -919,34 +1162,38 @@ PostgreSQL CORE  = représentation métier normalisée
 CSV              = sortie dérivée / validation / export
 ```
 
-### 19.2 Immutabilité RAW
+### 21.2 Immutabilité RAW
 
 Les fichiers historiques et snapshots live horodatés ne doivent pas être modifiés après acquisition.
 
-### 19.3 Reproductibilité
+### 21.3 Reproductibilité
 
 Une même collection de XML, traitée avec la même version du pipeline et le même modèle, doit produire des résultats équivalents.
 
-### 19.4 Idempotence
+### 21.4 Idempotence
 
 Une réexécution des mêmes données ne doit pas créer de doublons ni provoquer de mises à jour inutiles.
 
-### 19.5 Enrichissement
+### 21.5 Reprise
 
-Une nouvelle observation peut compléter ou corriger un événement existant.
+Une collecte historique interrompue doit pouvoir reprendre à partir de son checkpoint sans recommencer la plage complète.
 
-### 19.6 Non-régression des données
+### 21.6 Enrichissement
+
+Une nouvelle observation peut compléter ou corriger un événement structuré existant.
+
+### 21.7 Non-régression des données
 
 Une observation incomplète ne doit pas supprimer une information déjà connue.
 
-### 19.7 Fail-fast
+### 21.8 Fail-fast
 
-Une ambiguïté RAW→CORE doit provoquer une erreur explicite.
+Une ambiguïté RAW→CORE ou une date historique dont l'acquisition échoue doit provoquer un état explicite plutôt qu'être masquée.
 
-### 19.8 Séparation des responsabilités
+### 21.9 Séparation des responsabilités
 
 ```text
-Historical Collector   -> acquisition historique
+Historical Collector   -> acquisition historique / checkpoint
 Live Collector         -> acquisition live + orchestration du flux live
 RAW filesystem         -> provenance XML
 nasdaq_xml.py           -> parsing / normalisation
@@ -960,13 +1207,13 @@ data/processed          -> sorties dérivées
 docs                    -> documentation
 ```
 
-### 19.9 Traçabilité
+### 21.10 Traçabilité
 
 Les modifications de logique, de modèle ou de métriques doivent être versionnées et documentées.
 
 ---
 
-## 20. Validation historique
+## 22. Validation historique de référence
 
 Jeu de référence :
 
@@ -1014,7 +1261,118 @@ Cette validation confirme que la V0.8 ne modifie pas la baseline historique lors
 
 ---
 
-## 21. Validation contrôlée de l'évolution live
+## 23. Validation du collecteur historique V0.4
+
+La V0.4 a été testée avant le lancement de la collecte cinq ans.
+
+### 23.1 Plage contenant des RAW existants
+
+Plage :
+
+```text
+2026-08-03 -> 2026-08-05
+```
+
+Résultat :
+
+```text
+Nouveaux téléchargements : 0
+Fichiers déjà présents   : 3
+Échecs                    : 0
+Dernière date             : 2026-08-05
+```
+
+Le checkpoint spécifique à la plage a été créé correctement.
+
+### 23.2 Date sans HALT
+
+Date testée :
+
+```text
+2026-08-16
+```
+
+Le RSS reçu était un XML valide.
+
+Taille observée :
+
+```text
+448 octets
+```
+
+Le parser commun a produit :
+
+```text
+Événements : 0
+```
+
+Le cas RSS valide sans HALT est donc accepté correctement.
+
+### 23.3 Date historique avec données
+
+Date testée :
+
+```text
+2026-08-17
+```
+
+Le téléchargement a réussi à la première tentative.
+
+Taille observée :
+
+```text
+102547 octets
+```
+
+Le parser commun a produit :
+
+```text
+Événements : 67
+Premier symbole : EYPT
+```
+
+Une inspection ciblée a confirmé la présence de timestamps fractionnaires et d'informations de reprise complétées dans le RSS historique.
+
+### 23.4 Consolidation historique observée
+
+Pour un HALT `EJH` observé le 17 août 2026, le XML historique contenait directement :
+
+```text
+ReasonCode          : LUDP
+HaltTime            : 15:34:38.020
+ResumptionDate      : 08/17/2026
+ResumptionQuoteTime : 15:34:38
+ResumptionTradeTime : 15:39:38
+```
+
+L'affichage Web Nasdaq pouvait présenter plusieurs états du même HALT.
+
+Le RSS historique testé contenait l'information consolidée finale pour cet exemple.
+
+Cette observation doit être considérée comme une caractéristique constatée sur le cas testé, et non comme une garantie universelle avant validation des cinq ans.
+
+Les `reason_code` distincts demeurent des événements distincts selon la clé naturelle PostgreSQL.
+
+### 23.5 Reprise/idempotence
+
+Une seconde exécution de la plage :
+
+```text
+2026-08-17 -> 2026-08-17
+```
+
+a produit :
+
+```text
+COLLECTE DÉJÀ COMPLÈTE
+Aucune nouvelle requête effectuée.
+```
+
+Le comportement de reprise par checkpoint est donc validé sur le cas contrôlé.
+
+---
+
+## 24. Validation contrôlée de l'évolution live
 
 Test :
 
@@ -1062,7 +1420,7 @@ Le test valide notamment :
 - conservation du premier `source_file`;
 - idempotence.
 
-Après rollback, la base a été vérifiée :
+Après rollback :
 
 ```text
 RAW QLV08TEST  : 0
@@ -1071,7 +1429,7 @@ CORE QLV08TEST : 0
 
 ---
 
-## 22. Validation live réelle
+## 25. Validation live réelle
 
 Un flux RSS Nasdaq réel a été traité par le pipeline V0.8.
 
@@ -1125,29 +1483,33 @@ Duplicate natural keys : 0
 
 ---
 
-## 23. Limites actuellement connues
+## 26. Limites actuellement connues
 
 Les éléments suivants doivent encore être validés avant stabilisation complète :
 
 1. historique cinq ans non encore chargé;
-2. clé de déduplication Python différente de la clé naturelle PostgreSQL;
-3. relation 1 RAW → 1 CORE validée seulement sur les datasets actuels;
-4. possibilité théorique de fusion de plusieurs RAW dans un épisode;
-5. `collector_episode_id` séquentiel et non durable;
-6. fuseau horaire Nasdaq à confirmer;
-7. calendrier de marché non encore basé sur un calendrier officiel;
-8. comportement multi-day à revalider sur cinq ans;
-9. `source_file` ne représente actuellement que le premier snapshot structurant un RAW;
-10. modèle N snapshots → 1 RAW non encore matérialisé en PostgreSQL;
-11. évolution live naturelle `HALT ouvert → HALT complété` validée par test contrôlé, mais doit également être observée et confirmée sur des snapshots Nasdaq réels;
-12. corrections Nasdaq de valeur connue A → valeur connue B à observer sur données réelles;
-13. présence éventuelle de plusieurs observations du même HALT naturel dans un seul RSS à surveiller.
+2. complétude et intégrité de tous les XML historiques à valider;
+3. les fichiers RAW déjà présents sont actuellement considérés comme valides par le collecteur sans revalidation;
+4. clé de déduplication Python différente de la clé naturelle PostgreSQL;
+5. relation 1 RAW → 1 CORE validée seulement sur les datasets actuels;
+6. possibilité théorique de fusion de plusieurs RAW dans un épisode;
+7. `collector_episode_id` séquentiel et non durable;
+8. fuseau horaire Nasdaq à confirmer;
+9. calendrier de marché non encore basé sur un calendrier officiel;
+10. comportement multi-day à revalider sur cinq ans;
+11. `source_file` ne représente actuellement que le premier snapshot structurant un RAW;
+12. modèle N snapshots → 1 RAW non encore matérialisé en PostgreSQL;
+13. évolution live naturelle `HALT ouvert → HALT complété` à continuer d'observer sur des snapshots Nasdaq réels;
+14. corrections Nasdaq de valeur connue A → valeur connue B à observer sur données réelles;
+15. présence éventuelle de plusieurs observations du même HALT naturel dans un seul RSS à surveiller;
+16. comportement de collecte cinq ans à valider à volume complet;
+17. la politique exacte de période cinq ans doit être définie avant le lancement définitif.
 
 Ces limites doivent être traitées explicitement et non masquées par le pipeline.
 
 ---
 
-## 24. Analytics
+## 27. Analytics
 
 La logique analytique PostgreSQL demeure volontairement différée.
 
@@ -1181,7 +1543,7 @@ ne doit pas être portée dans PostgreSQL Analytics avant modélisation correcte
 
 ---
 
-## 25. Documentation du composant
+## 28. Documentation du composant
 
 ### `ARCHITECTURE.md`
 
@@ -1197,7 +1559,7 @@ Données, champs, relations et sémantique PostgreSQL.
 
 ### `README.md`
 
-Point d'entrée du composant.
+Point d'entrée du composant et procédures d'exécution.
 
 Documentation générale PostgreSQL :
 
@@ -1213,7 +1575,7 @@ Installation :
 
 ---
 
-## 26. Gouvernance documentaire
+## 29. Gouvernance documentaire
 
 | Modification | Documentation |
 |---|---|
@@ -1228,22 +1590,23 @@ La documentation doit évoluer en même temps que le code.
 
 ---
 
-## 27. État actuel
+## 30. État actuel
 
 ```text
 V0.8 — PIPELINE POSTGRESQL HISTORIQUE ET LIVE VALIDÉ
+V0.4 — COLLECTEUR HISTORIQUE ROBUSTE VALIDÉ POUR LE BACKFILL
 ```
 
 La baseline historique reste reproductible.
 
-La V0.8 ajoute notamment :
+La V0.8 fournit notamment :
 
 - parser XML commun;
 - support `Mkt` / `Market`;
 - déduplication commune;
 - construction commune des épisodes;
 - snapshots live XML immuables;
-- persistance live directe PostgreSQL;
+- persistance directe PostgreSQL;
 - enrichissement des HALT existants;
 - protection contre les observations régressives;
 - compteurs `inserted / updated / unchanged`;
@@ -1251,29 +1614,38 @@ La V0.8 ajoute notamment :
 - validation live réelle;
 - idempotence historique et live.
 
+La V0.4 du collecteur historique fournit :
+
+- plages de dates explicites;
+- checkpoints spécifiques à chaque plage;
+- reprise automatique;
+- détection des RAW existants;
+- retry réseau;
+- validation XML;
+- écriture atomique XML;
+- écriture atomique checkpoint;
+- suivi des échecs;
+- arrêt fail-fast sur une date non acquise;
+- protection contre les dates futures.
+
 ---
 
-## 28. Prochaines étapes
+## 31. Prochaines étapes
 
 ### Étape immédiate
 
-Finaliser le checkpoint V0.8 :
+Créer le checkpoint Git de la V0.4 du collecteur historique et de sa documentation.
 
-- mettre à jour la documentation associée;
-- versionner le test d'intégration;
-- effectuer les contrôles Git;
-- committer et pousser la V0.8;
-- documenter le checkpoint dans GitHub Issue #8.
+### Étape suivante — historique cinq ans
 
-Après cette validation, l'intégration PostgreSQL du chemin live peut être considérée complétée pour le périmètre V0.8 actuel.
+Définir précisément la plage historique cinq ans, puis lancer la collecte contrôlée.
 
-### Étape historique suivante
+La validation cinq ans devra couvrir au minimum :
 
-Construire, charger et valider l'historique Nasdaq HALT sur cinq ans.
-
-La validation cinq ans devra notamment couvrir :
-
-- complétude de la collecte;
+- complétude des dates;
+- intégrité XML;
+- parseabilité de tous les fichiers;
+- distribution des événements par date;
 - clés naturelles;
 - déduplication;
 - cardinalité RAW→CORE;
@@ -1283,6 +1655,7 @@ La validation cinq ans devra notamment couvrir :
 - fuseaux horaires;
 - multi-day;
 - calendrier de marché;
-- idempotence à volume complet.
+- idempotence à volume complet;
+- comparaison des résultats Python et PostgreSQL.
 
 La définition des métriques ne doit pas être modifiée silencieusement pendant cette validation.
