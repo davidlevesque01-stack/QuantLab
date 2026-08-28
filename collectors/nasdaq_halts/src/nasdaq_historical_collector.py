@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import json
 import time
 import xml.etree.ElementTree as ET
@@ -328,7 +328,7 @@ def download_halts_for_date(
 
     if output_file.exists():
         print(
-            f"{target_date} : fichier déjà présent ✓"
+            f"{target_date} : fichier déjà présent"
         )
 
         return "existing"
