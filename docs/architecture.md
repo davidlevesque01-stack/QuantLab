@@ -100,11 +100,53 @@ Collectors should reuse these components rather than implementing duplicate func
 
 ## 7. Data Architecture
 
-Production structured data will be stored in a centralized managed PostgreSQL instance.
+Production structured data is stored in a centralized managed PostgreSQL instance.
 
-Both collaborators and authorized automated processes will operate against the same authoritative data source.
+### DEV Environment
 
-Database credentials must remain outside the Git repository.
+The initial QuantLab database environment uses Azure Database for PostgreSQL Flexible Server.
+
+Current DEV configuration:
+
+- Azure region: Canada Central;
+- PostgreSQL version: 17;
+- compute tier: Burstable;
+- compute size: B1ms, 1 vCore, 2 GiB memory;
+- storage: 32 GiB;
+- high availability: disabled;
+- backup retention: 7 days;
+- network access: public access restricted by Azure firewall rules;
+- transport encryption: TLS;
+- authentication: PostgreSQL authentication.
+
+Server:
+
+    quantlab-postgres-dev.postgres.database.azure.com
+
+Primary database:
+
+    quantlab
+
+The database currently uses the following logical schemas:
+
+- `raw` — structured data close to the original source;
+- `core` — normalized business data;
+- `analytics` — derived analytical datasets, views, and materialized views.
+
+For the Nasdaq Halt Collector, the original Nasdaq XML files remain the provenance/source files from which the structured PostgreSQL data can be rebuilt.
+
+The initial PostgreSQL migration creates:
+
+    raw.nasdaq_trade_halt
+    core.nasdaq_halt_episode
+
+Analytical objects are intentionally deferred until market-calendar and multi-day halt semantics have been validated against the Python V0.6 baseline.
+
+Both collaborators and authorized automated processes will eventually operate against the same authoritative PostgreSQL data source.
+
+Database credentials and other secrets must remain outside the Git repository.
+
+The DEV environment currently uses the PostgreSQL administrator account for initial provisioning and validation only. Dedicated application accounts with least-privilege permissions will be introduced before production use.
 
 ## 8. Execution Architecture
 

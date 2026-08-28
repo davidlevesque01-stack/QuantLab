@@ -90,24 +90,30 @@ The existing Nasdaq Halt Collector is preserved separately during migration at:
 
 It must not be deleted until migration to the QuantLab monorepo has been completed and validated.
 
-## 8. Next Installation Stages
+## 8. Installation Status and Remaining Stages
 
-The following stages remain to be completed:
+Completed stages:
 
 1. Configure `.gitignore`.
 2. Create initial repository documentation.
 3. Perform first Git commit and push.
 4. Configure GitHub Projects.
-5. Add second collaborator.
-6. Migrate Nasdaq Halt Collector.
-7. Establish Python environment management.
-8. Deploy managed PostgreSQL.
-9. Configure database security and users.
-10. Integrate collectors with PostgreSQL.
-11. Configure automated execution.
-12. Configure on-demand execution.
-13. Configure backup and restore procedures.
-14. Configure Microsoft collaboration environment.
+5. Migrate Nasdaq Halt Collector.
+6. Establish Python environment management.
+7. Deploy managed PostgreSQL.
+8. Create the initial PostgreSQL database and schema migration.
+
+Remaining stages:
+
+1. Add second collaborator.
+2. Configure database security and application users.
+3. Integrate collectors with PostgreSQL.
+4. Load and validate the five-year Nasdaq halt history.
+5. Configure automated execution.
+6. Configure on-demand execution.
+7. Configure backup and restore procedures.
+8. Configure Microsoft collaboration environment.
+9. Build the database query interface.
 
 ## 9. GitHub Projects Configuration
 
@@ -220,3 +226,120 @@ Résultat de validation :
 - BCARU TEST : PASS
 
 Le monorepo QuantLab est donc autonome par rapport à l'ancien environnement virtuel situé sous `C:\QuantLab\nasdaq_halts`.
+
+## 12. PostgreSQL DEV Environment
+
+The initial QuantLab managed database is hosted using Azure Database for PostgreSQL Flexible Server.
+
+Reference DEV configuration:
+
+- Azure region: Canada Central
+- PostgreSQL version: 17
+- compute tier: Burstable
+- compute size: B1ms
+- storage: 32 GiB
+- high availability: disabled
+- backup retention: 7 days
+- authentication: PostgreSQL authentication
+- network access: public access restricted by Azure firewall rules
+- transport security: TLS
+
+Server endpoint:
+
+    quantlab-postgres-dev.postgres.database.azure.com
+
+Port:
+
+    5432
+
+Primary QuantLab database:
+
+    quantlab
+
+The database contains the following initial schemas:
+
+    raw
+    core
+    analytics
+
+The initial migration is located at:
+
+    database\migrations\001_create_nasdaq_halts_schema.sql
+
+It creates:
+
+    raw.nasdaq_trade_halt
+    core.nasdaq_halt_episode
+
+### PostgreSQL Client Installation on Windows
+
+PostgreSQL 17 client tools were installed using Windows Package Manager:
+
+    winget install --id PostgreSQL.PostgreSQL.17 --exact
+
+The client version can be verified with:
+
+    psql --version
+
+Reference validated version:
+
+    psql (PostgreSQL) 17.11
+
+If the PostgreSQL binary directory is not yet available in the current PowerShell `PATH`, it can be added temporarily with:
+
+    $pgBin = "C:\Program Files\PostgreSQL\17\bin"
+    $env:Path = "$pgBin;$env:Path"
+
+### Connecting to Azure PostgreSQL
+
+Example connection from PowerShell:
+
+    psql "host=quantlab-postgres-dev.postgres.database.azure.com port=5432 dbname=quantlab user=quantlab_admin sslmode=require"
+
+The password is entered interactively.
+
+Passwords and database credentials must never be stored in:
+
+- Git;
+- GitHub;
+- Markdown documentation;
+- committed configuration files;
+- source code.
+
+A successful connection must report an SSL connection.
+
+### Creating the QuantLab Database
+
+During initial provisioning, the administrative connection is made to the default `postgres` database.
+
+The QuantLab database is created with:
+
+    CREATE DATABASE quantlab;
+
+The session can then switch to the new database using:
+
+    \c quantlab
+
+### Applying Database Migrations
+
+From a `psql` session connected to `quantlab`, the initial migration is executed with:
+
+    \i 'C:/QuantLab/QuantLab/database/migrations/001_create_nasdaq_halts_schema.sql'
+
+The migration was successfully validated against Azure PostgreSQL 17.
+
+Validation confirmed:
+
+- schema `raw`;
+- schema `core`;
+- schema `analytics`;
+- table `raw.nasdaq_trade_halt`;
+- table `core.nasdaq_halt_episode`;
+- primary keys;
+- natural-key uniqueness;
+- foreign-key relationship;
+- 1:1 uniqueness on `trade_halt_id`;
+- data-integrity check constraints;
+- expected indexes.
+
+Future migrations must be reviewed, committed to Git, and tested in DEV before promotion to other environments.
