@@ -1,3 +1,8 @@
+# ============================================================
+# QUANTLAB - NASDAQ HALT LIVE COLLECTOR
+# VERSION 0.8
+# ============================================================
+
 import csv
 import json
 
@@ -5,293 +10,534 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from collectors.nasdaq_halts.src.nasdaq_xml import parse_xml_bytes
+from collectors.nasdaq_halts.src.nasdaq_xml import (
+    parse_xml_bytes,
+)
 
+from collectors.nasdaq_halts.src.nasdaq_deduplication import (
+    deduplicate_events,
+)
 
-# ============================================================
-# QUANTLAB - NASDAQ HALT LIVE COLLECTOR
-# VERSION 0.8
-# ============================================================
+from collectors.nasdaq_halts.src.nasdaq_episodes import (
+    build_halt_episodes,
+)
+
+from collectors.nasdaq_halts.src.nasdaq_postgresql import (
+    persist_nasdaq_halts,
+)
+
 
 VERSION = "0.8"
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ============================================================
-# Configuration
-# ============================================================
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_FILE = PROJECT_ROOT / "config" / "config.json"
-
-with open(
-    CONFIG_FILE,
-    "r",
-    encoding="utf-8"
-) as file:
-
-    config = json.load(file)
-
-
-# ============================================================
-# Répertoires
-# ============================================================
-
-raw_directory = (
-    PROJECT_ROOT
-    / config["raw_directory"]
-)
-
-live_raw_directory = (
-    raw_directory
-    / "live"
-)
-
-processed_directory = (
-    PROJECT_ROOT
-    / config["processed_directory"]
-)
-
-raw_directory.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
-live_raw_directory.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
-processed_directory.mkdir(
-    parents=True,
-    exist_ok=True
+CONFIG_FILE = (
+    BASE_DIR
+    / "config"
+    / "config.json"
 )
 
 
 # ============================================================
-# Téléchargement du flux Nasdaq
+# CONFIGURATION
 # ============================================================
 
-url = config["nasdaq_rss_base_url"]
+def load_config():
+    """
+    Charge la configuration du collecteur Nasdaq.
+    """
 
-request = Request(
+    with open(
+        CONFIG_FILE,
+        "r",
+        encoding="utf-8",
+    ) as file:
+
+        return json.load(file)
+
+
+# ============================================================
+# TÉLÉCHARGEMENT
+# ============================================================
+
+def download_nasdaq_feed(
     url,
-    headers={
-        "User-Agent":
-            config["user_agent"]
-    }
-)
+    timeout,
+    user_agent,
+):
+    """
+    Télécharge le flux RSS Nasdaq courant.
+    """
 
-print()
-print(
-    "============================================================"
-)
-print(
-    f"QUANTLAB - NASDAQ HALT LIVE COLLECTOR V{VERSION}"
-)
-print(
-    "============================================================"
-)
-print()
-
-print(
-    "Téléchargement du flux Nasdaq..."
-)
-
-with urlopen(
-    request,
-    timeout=config["request_timeout_seconds"]
-) as response:
-
-    xml_data = response.read()
-
-print(
-    f"Flux reçu : {len(xml_data)} octets"
-)
-
-
-# ============================================================
-# Snapshot XML immuable
-# ============================================================
-
-collection_timestamp = (
-    datetime.now(
-        timezone.utc
-    )
-)
-
-timestamp_text = (
-    collection_timestamp.strftime(
-        "%Y%m%dT%H%M%SZ"
-    )
-)
-
-snapshot_file = (
-    live_raw_directory
-    / f"tradehalts_live_{timestamp_text}.xml"
-)
-
-with open(
-    snapshot_file,
-    "wb"
-) as file:
-
-    file.write(
-        xml_data
+    request = Request(
+        url,
+        headers={
+            "User-Agent": user_agent,
+        },
     )
 
-print(
-    f"Snapshot XML : {snapshot_file}"
-)
+    with urlopen(
+        request,
+        timeout=timeout,
+    ) as response:
+
+        return response.read()
 
 
 # ============================================================
-# Copie latest
+# SNAPSHOT RAW
 # ============================================================
 
-latest_file = (
-    raw_directory
-    / "latest_tradehalts.xml"
-)
+def save_raw_snapshot(
+    xml_bytes,
+    raw_directory,
+):
+    """
+    Sauvegarde deux représentations du flux reçu.
 
-with open(
-    latest_file,
-    "wb"
-) as file:
+    1. Snapshot immuable horodaté :
+       raw/nasdaq/live/tradehalts_live_<UTC>.xml
 
-    file.write(
-        xml_data
+    2. Copie pratique du dernier flux :
+       raw/nasdaq/latest_tradehalts.xml
+
+    Le snapshot immuable constitue la provenance du lot live.
+    """
+
+    live_directory = (
+        raw_directory
+        / "live"
     )
 
-print(
-    f"XML latest   : {latest_file}"
-)
-
-
-# ============================================================
-# Parsing normalisé
-# ============================================================
-
-records = parse_xml_bytes(
-    xml_data,
-    snapshot_file.name
-)
-
-print()
-print(
-    f"Nombre d'enregistrements trouvés : {len(records)}"
-)
-
-
-# ============================================================
-# Affichage de contrôle
-# ============================================================
-
-if records:
-
-    print()
-    print(
-        "Premier enregistrement :"
+    live_directory.mkdir(
+        parents=True,
+        exist_ok=True,
     )
-    print()
 
-    first_record = records[0]
+    raw_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    fields_to_display = [
-        "halt_date",
-        "halt_time",
+    timestamp = (
+        datetime.now(timezone.utc)
+        .strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
+    )
+
+    snapshot_file = (
+        live_directory
+        / f"tradehalts_live_{timestamp}.xml"
+    )
+
+    latest_file = (
+        raw_directory
+        / "latest_tradehalts.xml"
+    )
+
+    snapshot_file.write_bytes(
+        xml_bytes
+    )
+
+    latest_file.write_bytes(
+        xml_bytes
+    )
+
+    return (
+        snapshot_file,
+        latest_file,
+    )
+
+
+# ============================================================
+# EXPORT CSV LIVE
+# ============================================================
+
+def export_live_csv(
+    events,
+    processed_directory,
+):
+    """
+    Exporte le dernier lot live en CSV.
+
+    Ce fichier est uniquement un export pratique/debug.
+
+    Il n'est PAS utilisé comme intermédiaire pour PostgreSQL.
+    """
+
+    processed_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    csv_file = (
+        processed_directory
+        / "live_tradehalts.csv"
+    )
+
+    fieldnames = [
         "symbol",
         "issue_name",
         "market",
         "reason_code",
-        "pause_threshold_price",
+        "halt_date",
+        "halt_time",
         "resumption_date",
         "resumption_quote_time",
         "resumption_trade_time",
-        "halt_start",
-        "halt_end",
-        "source_file",
+        "pause_threshold_price",
     ]
 
-    for field in fields_to_display:
+    with open(
+        csv_file,
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as file:
 
-        print(
-            f"{field}: "
-            f"{first_record[field]}"
+        writer = csv.DictWriter(
+            file,
+            fieldnames=fieldnames,
+            extrasaction="ignore",
         )
 
-else:
+        writer.writeheader()
+
+        writer.writerows(
+            events
+        )
+
+    return csv_file
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
 
     print()
     print(
-        "Aucun HALT présent dans le flux."
+        "============================================================"
+    )
+    print(
+        f"QUANTLAB - NASDAQ HALT LIVE COLLECTOR V{VERSION}"
+    )
+    print(
+        "============================================================"
+    )
+    print()
+
+    config = load_config()
+
+    nasdaq_url = (
+        config[
+            "nasdaq_rss_base_url"
+        ]
+    )
+
+    raw_directory = (
+        BASE_DIR
+        / config[
+            "raw_directory"
+        ]
+    )
+
+    processed_directory = (
+        BASE_DIR
+        / config[
+            "processed_directory"
+        ]
+    )
+
+    timeout = config.get(
+        "request_timeout_seconds",
+        30,
+    )
+
+    user_agent = config.get(
+        "user_agent",
+        "QuantLab Nasdaq Halt Collector/0.8",
+    )
+
+    # ========================================================
+    # 1. DOWNLOAD
+    # ========================================================
+
+    print(
+        "Téléchargement du flux Nasdaq..."
+    )
+
+    xml_bytes = (
+        download_nasdaq_feed(
+            nasdaq_url,
+            timeout,
+            user_agent,
+        )
+    )
+
+    print(
+        f"Flux reçu : {len(xml_bytes)} octets"
+    )
+
+    # ========================================================
+    # 2. SNAPSHOT XML
+    # ========================================================
+
+    (
+        snapshot_file,
+        latest_file,
+    ) = save_raw_snapshot(
+        xml_bytes,
+        raw_directory,
+    )
+
+    print(
+        f"Snapshot XML : {snapshot_file}"
+    )
+
+    print(
+        f"XML latest   : {latest_file}"
+    )
+
+    # ========================================================
+    # 3. PARSING COMMUN
+    # ========================================================
+
+    events = parse_xml_bytes(
+        xml_bytes,
+        source_file=snapshot_file.name,
+    )
+
+    print(
+        f"Événements bruts : {len(events)}"
+    )
+
+    # ========================================================
+    # 4. DÉDUPLICATION
+    # ========================================================
+
+    unique_events = (
+        deduplicate_events(
+            events
+        )
+    )
+
+    print(
+        f"Événements uniques : {len(unique_events)}"
+    )
+
+    # ========================================================
+    # 5. ZÉRO ÉVÉNEMENT
+    # ========================================================
+
+    if not unique_events:
+
+        print()
+        print(
+            "Aucun HALT présent dans le flux."
+        )
+
+        csv_file = (
+            export_live_csv(
+                [],
+                processed_directory,
+            )
+        )
+
+        print(
+            f"CSV live créé : {csv_file}"
+        )
+
+        print()
+        print(
+            "COLLECTE LIVE V0.8 TERMINÉE"
+        )
+
+        return
+
+    # ========================================================
+    # 6. INFORMATION PREMIER ÉVÉNEMENT
+    # ========================================================
+
+    first_event = (
+        unique_events[0]
+    )
+
+    print()
+    print(
+        "Premier événement :"
+    )
+
+    print(
+        f"  symbol          : "
+        f"{first_event.get('symbol')}"
+    )
+
+    print(
+        f"  issue_name      : "
+        f"{first_event.get('issue_name')}"
+    )
+
+    print(
+        f"  market          : "
+        f"{first_event.get('market')}"
+    )
+
+    print(
+        f"  reason_code     : "
+        f"{first_event.get('reason_code')}"
+    )
+
+    print(
+        f"  halt_start      : "
+        f"{first_event.get('halt_start')}"
+    )
+
+    print(
+        f"  halt_end        : "
+        f"{first_event.get('halt_end')}"
+    )
+
+    print(
+        f"  source_file     : "
+        f"{first_event.get('source_file')}"
+    )
+
+    # ========================================================
+    # 7. CONSTRUCTION DES ÉPISODES
+    # ========================================================
+
+    (
+        episodes,
+        episode_statistics,
+    ) = build_halt_episodes(
+        unique_events
+    )
+
+    print()
+    print(
+        f"HALT Episodes : {len(episodes)}"
+    )
+
+    print(
+        "Durées calculables : "
+        f"{episode_statistics['duration_count']}"
+    )
+
+    print(
+        "Clôture YES        : "
+        f"{episode_statistics['close_yes']}"
+    )
+
+    print(
+        "Clôture NO         : "
+        f"{episode_statistics['close_no']}"
+    )
+
+    print(
+        "Clôture UNKNOWN    : "
+        f"{episode_statistics['close_unknown']}"
+    )
+
+    print(
+        "Clôture MULTI_DAY  : "
+        f"{episode_statistics['close_multi_day']}"
+    )
+
+    # ========================================================
+    # 8. POSTGRESQL
+    # ========================================================
+
+    persistence_result = (
+        persist_nasdaq_halts(
+            unique_events,
+            episodes,
+        )
+    )
+
+    # ========================================================
+    # 9. EXPORT CSV OPTIONNEL
+    # ========================================================
+
+    csv_file = (
+        export_live_csv(
+            unique_events,
+            processed_directory,
+        )
+    )
+
+    print()
+    print(
+        f"CSV live créé : {csv_file}"
+    )
+
+    print(
+        f"Enregistrements exportés : "
+        f"{len(unique_events)}"
+    )
+
+    # ========================================================
+    # 10. RÉSUMÉ
+    # ========================================================
+
+    print()
+    print(
+        "============================================================"
+    )
+    print(
+        "RÉSUMÉ LIVE V0.8"
+    )
+    print(
+        "============================================================"
+    )
+
+    print(
+        f"Événements uniques : "
+        f"{len(unique_events)}"
+    )
+
+    print(
+        f"HALT Episodes      : "
+        f"{len(episodes)}"
+    )
+
+    print(
+        "RAW inserted       : "
+        f"{persistence_result['raw_inserted']}"
+    )
+
+    print(
+        "RAW updated        : "
+        f"{persistence_result['raw_updated']}"
+    )
+
+    print(
+        "RAW unchanged      : "
+        f"{persistence_result['raw_unchanged']}"
+    )
+
+    print(
+        "CORE inserted      : "
+        f"{persistence_result['core_inserted']}"
+    )
+
+    print(
+        "CORE updated       : "
+        f"{persistence_result['core_updated']}"
+    )
+
+    print(
+        "CORE unchanged     : "
+        f"{persistence_result['core_unchanged']}"
+    )
+
+    print()
+    print(
+        "COLLECTE LIVE V0.8 TERMINÉE ✓"
     )
 
 
-# ============================================================
-# Export CSV live secondaire
-# ============================================================
-
-live_csv_file = (
-    processed_directory
-    / "live_tradehalts.csv"
-)
-
-fieldnames = [
-    "halt_date",
-    "halt_time",
-    "symbol",
-    "issue_name",
-    "market",
-    "reason_code",
-    "pause_threshold_price",
-    "resumption_date",
-    "resumption_quote_time",
-    "resumption_trade_time",
-]
-
-with open(
-    live_csv_file,
-    "w",
-    newline="",
-    encoding="utf-8-sig"
-) as file:
-
-    writer = csv.DictWriter(
-        file,
-        fieldnames=fieldnames,
-        extrasaction="ignore"
-    )
-
-    writer.writeheader()
-
-    writer.writerows(
-        records
-    )
-
-
-# ============================================================
-# Résultat
-# ============================================================
-
-print()
-print(
-    f"CSV live créé : {live_csv_file}"
-)
-
-print(
-    f"Enregistrements exportés : {len(records)}"
-)
-
-print()
-
-print(
-    "============================================================"
-)
-
-print(
-    f"COLLECTE LIVE V{VERSION} TERMINÉE"
-)
-
-print(
-    "============================================================"
-)
+if __name__ == "__main__":
+    main()

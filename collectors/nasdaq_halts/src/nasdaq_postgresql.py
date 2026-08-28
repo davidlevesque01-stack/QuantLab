@@ -7,10 +7,10 @@ from shared.database import get_connection
 
 # ============================================================
 # QuantLab - Nasdaq PostgreSQL Persistence
-# VERSION 0.7
+# VERSION 0.8
 # ============================================================
 
-VERSION = "0.7"
+VERSION = "0.8"
 
 ALLOWED_HALT_CLOSE_STATUS = {
     "YES",
@@ -133,6 +133,68 @@ def parse_halt_close_status(value):
     return value
 
 
+def prefer_new_value(
+    existing_value,
+    incoming_value
+):
+    """
+    Retourne la valeur à conserver.
+
+    Règles V0.8 :
+
+        NULL -> NULL       : conserve NULL
+        NULL -> valeur     : prend la nouvelle valeur
+        valeur -> NULL     : conserve la valeur existante
+        valeur A -> A      : conserve A
+        valeur A -> B      : prend B
+
+    Une observation Nasdaq vide ne peut donc jamais effacer
+    une information déjà connue.
+    """
+
+    if incoming_value is None:
+        return existing_value
+
+    return incoming_value
+
+
+def prefer_close_status(
+    existing_status,
+    incoming_status
+):
+    """
+    Retourne le statut de clôture à conserver.
+
+    UNKNOWN est considéré comme moins informatif qu'un statut
+    final déjà connu.
+
+    Ainsi :
+
+        YES/MULTI_DAY/NO -> UNKNOWN
+
+    ne provoque pas de régression.
+
+    Un nouveau statut final peut toutefois corriger un statut
+    final précédent si les nouvelles données Nasdaq le justifient.
+    """
+
+    if incoming_status is None:
+        return existing_status
+
+    if (
+        incoming_status == "UNKNOWN"
+        and
+        existing_status in {
+            "YES",
+            "NO",
+            "MULTI_DAY",
+        }
+    ):
+        return existing_status
+
+    return incoming_status
+
+
 # ============================================================
 # IDENTITÉ RAW
 # ============================================================
@@ -214,7 +276,7 @@ def find_source_event_for_episode(
     """
     Trouve l'événement RAW qui correspond à un épisode.
 
-    Pour la V0.7, la relation doit être strictement 1:1.
+    Pour la V0.8, la relation demeure strictement 1:1.
 
     Un épisode doit correspondre exactement à un événement
     selon :
@@ -228,9 +290,8 @@ def find_source_event_for_episode(
     Si aucun événement ou plusieurs événements correspondent,
     l'écriture est interrompue.
 
-    Cette stratégie est volontairement stricte afin de détecter
-    si le modèle 1 RAW -> 1 CORE cesse d'être valide sur
-    l'historique complet.
+    Cette stratégie demeure volontairement stricte afin de
+    détecter si le modèle 1 RAW -> 1 CORE cesse d'être valide.
     """
 
     candidates = []
@@ -305,13 +366,41 @@ def write_trade_halts(
 
         raw.nasdaq_trade_halt
 
+    La V0.8 distingue :
+
+        inserted
+        updated
+        unchanged
+
+    Les valeurs NULL entrantes n'effacent jamais une valeur
+    existante.
+
+    source_file représente le premier snapshot ayant créé
+    l'événement RAW et n'est donc pas modifié lors d'un UPDATE.
+
     Retourne :
 
         inserted
-        existing
+        updated
+        unchanged
         raw_ids
+    """
 
-    raw_ids associe chaque clé naturelle au ID PostgreSQL.
+    select_sql = """
+        SELECT
+            id,
+            issue_name,
+            resumption_date,
+            resumption_quote_time,
+            resumption_trade_time,
+            pause_threshold_price,
+            source_file
+        FROM raw.nasdaq_trade_halt
+        WHERE symbol = %(symbol)s
+          AND halt_date = %(halt_date)s
+          AND halt_time = %(halt_time)s
+          AND reason_code = %(reason_code)s
+          AND market = %(market)s;
     """
 
     insert_sql = """
@@ -341,29 +430,23 @@ def write_trade_halts(
             %(pause_threshold_price)s,
             %(source_file)s
         )
-        ON CONFLICT (
-            symbol,
-            halt_date,
-            halt_time,
-            reason_code,
-            market
-        )
-        DO NOTHING
         RETURNING id;
     """
 
-    select_sql = """
-        SELECT id
-        FROM raw.nasdaq_trade_halt
-        WHERE symbol = %(symbol)s
-          AND halt_date = %(halt_date)s
-          AND halt_time = %(halt_time)s
-          AND reason_code = %(reason_code)s
-          AND market = %(market)s;
+    update_sql = """
+        UPDATE raw.nasdaq_trade_halt
+        SET
+            issue_name = %(issue_name)s,
+            resumption_date = %(resumption_date)s,
+            resumption_quote_time = %(resumption_quote_time)s,
+            resumption_trade_time = %(resumption_trade_time)s,
+            pause_threshold_price = %(pause_threshold_price)s
+        WHERE id = %(id)s;
     """
 
     inserted = 0
-    existing = 0
+    updated = 0
+    unchanged = 0
 
     raw_ids = {}
 
@@ -450,13 +533,30 @@ def write_trade_halts(
             }
 
             cur.execute(
-                insert_sql,
+                select_sql,
                 params
             )
 
-            result = cur.fetchone()
+            existing_row = (
+                cur.fetchone()
+            )
 
-            if result is not None:
+            if existing_row is None:
+
+                cur.execute(
+                    insert_sql,
+                    params
+                )
+
+                result = cur.fetchone()
+
+                if result is None:
+
+                    raise RuntimeError(
+                        "RAW INSERT did not return an id: "
+                        f"{event.get('symbol')} "
+                        f"{halt_start}"
+                    )
 
                 raw_id = result[0]
 
@@ -464,30 +564,122 @@ def write_trade_halts(
 
             else:
 
-                cur.execute(
-                    select_sql,
-                    params
+                (
+                    raw_id,
+                    existing_issue_name,
+                    existing_resumption_date,
+                    existing_resumption_quote_time,
+                    existing_resumption_trade_time,
+                    existing_pause_threshold_price,
+                    existing_source_file,
+                ) = existing_row
+
+                desired_issue_name = (
+                    prefer_new_value(
+                        existing_issue_name,
+                        params["issue_name"]
+                    )
                 )
 
-                existing_result = (
-                    cur.fetchone()
+                desired_resumption_date = (
+                    prefer_new_value(
+                        existing_resumption_date,
+                        params["resumption_date"]
+                    )
                 )
 
-                if existing_result is None:
+                desired_resumption_quote_time = (
+                    prefer_new_value(
+                        existing_resumption_quote_time,
+                        params[
+                            "resumption_quote_time"
+                        ]
+                    )
+                )
 
-                    raise RuntimeError(
-                        "RAW event conflict detected "
-                        "but existing PostgreSQL row "
-                        "could not be retrieved: "
-                        f"{event.get('symbol')} "
-                        f"{halt_start}"
+                desired_resumption_trade_time = (
+                    prefer_new_value(
+                        existing_resumption_trade_time,
+                        params[
+                            "resumption_trade_time"
+                        ]
+                    )
+                )
+
+                desired_pause_threshold_price = (
+                    prefer_new_value(
+                        existing_pause_threshold_price,
+                        params[
+                            "pause_threshold_price"
+                        ]
+                    )
+                )
+
+                has_changes = any(
+                    (
+                        desired_issue_name
+                        != existing_issue_name,
+
+                        desired_resumption_date
+                        != existing_resumption_date,
+
+                        desired_resumption_quote_time
+                        != existing_resumption_quote_time,
+
+                        desired_resumption_trade_time
+                        != existing_resumption_trade_time,
+
+                        desired_pause_threshold_price
+                        != existing_pause_threshold_price,
+                    )
+                )
+
+                if has_changes:
+
+                    update_params = {
+                        "id":
+                            raw_id,
+
+                        "issue_name":
+                            desired_issue_name,
+
+                        "resumption_date":
+                            desired_resumption_date,
+
+                        "resumption_quote_time":
+                            desired_resumption_quote_time,
+
+                        "resumption_trade_time":
+                            desired_resumption_trade_time,
+
+                        "pause_threshold_price":
+                            desired_pause_threshold_price,
+                    }
+
+                    cur.execute(
+                        update_sql,
+                        update_params
                     )
 
-                raw_id = (
-                    existing_result[0]
-                )
+                    if cur.rowcount != 1:
 
-                existing += 1
+                        raise RuntimeError(
+                            "Unexpected RAW UPDATE row count "
+                            f"for id {raw_id}: "
+                            f"{cur.rowcount}"
+                        )
+
+                    updated += 1
+
+                else:
+
+                    unchanged += 1
+
+                # V0.8 :
+                # existing_source_file est volontairement conservé.
+                # Un futur modèle de provenance permettra de relier
+                # plusieurs snapshots au même événement RAW.
+                _ = existing_source_file
 
             natural_key = (
                 get_raw_natural_key(
@@ -509,7 +701,8 @@ def write_trade_halts(
 
     return (
         inserted,
-        existing,
+        updated,
+        unchanged,
         raw_ids,
     )
 
@@ -529,8 +722,36 @@ def write_halt_episodes(
 
         core.nasdaq_halt_episode
 
-    Pour V0.7, un épisode doit être relié de façon
-    non ambiguë à exactement un événement RAW.
+    La V0.8 distingue :
+
+        inserted
+        updated
+        unchanged
+
+    Une valeur NULL entrante ne remplace jamais une valeur
+    déjà connue.
+
+    collector_episode_id est conservé après le premier INSERT,
+    car les identifiants séquentiels produits actuellement par
+    le calculateur ne constituent pas une identité persistante.
+
+    UNKNOWN ne remplace pas un statut final déjà connu.
+    """
+
+    select_sql = """
+        SELECT
+            id,
+            collector_episode_id,
+            symbol,
+            issue_name,
+            market,
+            reason_code,
+            halt_start,
+            halt_end,
+            duration_minutes,
+            halt_close_status
+        FROM core.nasdaq_halt_episode
+        WHERE trade_halt_id = %(trade_halt_id)s;
     """
 
     insert_sql = """
@@ -558,15 +779,24 @@ def write_halt_episodes(
             %(duration_minutes)s,
             %(halt_close_status)s
         )
-        ON CONFLICT (
-            trade_halt_id
-        )
-        DO NOTHING
         RETURNING id;
     """
 
+    update_sql = """
+        UPDATE core.nasdaq_halt_episode
+        SET
+            issue_name = %(issue_name)s,
+            market = %(market)s,
+            reason_code = %(reason_code)s,
+            halt_end = %(halt_end)s,
+            duration_minutes = %(duration_minutes)s,
+            halt_close_status = %(halt_close_status)s
+        WHERE id = %(id)s;
+    """
+
     inserted = 0
-    existing = 0
+    updated = 0
+    unchanged = 0
 
     with conn.cursor() as cur:
 
@@ -601,7 +831,7 @@ def write_halt_episodes(
                 )
 
             duration_minutes = (
-                empty_to_none(
+                parse_decimal(
                     episode.get(
                         "duration_minutes"
                     )
@@ -663,23 +893,188 @@ def write_halt_episodes(
             }
 
             cur.execute(
-                insert_sql,
+                select_sql,
                 params
             )
 
-            result = cur.fetchone()
+            existing_row = (
+                cur.fetchone()
+            )
 
-            if result is None:
+            if existing_row is None:
 
-                existing += 1
+                cur.execute(
+                    insert_sql,
+                    params
+                )
 
-            else:
+                result = cur.fetchone()
+
+                if result is None:
+
+                    raise RuntimeError(
+                        "CORE INSERT did not return an id "
+                        "for trade_halt_id "
+                        f"{trade_halt_id}"
+                    )
 
                 inserted += 1
 
+            else:
+
+                (
+                    core_id,
+                    existing_collector_episode_id,
+                    existing_symbol,
+                    existing_issue_name,
+                    existing_market,
+                    existing_reason_code,
+                    existing_halt_start,
+                    existing_halt_end,
+                    existing_duration_minutes,
+                    existing_halt_close_status,
+                ) = existing_row
+
+                if (
+                    existing_symbol
+                    != params["symbol"]
+                ):
+
+                    raise RuntimeError(
+                        "CORE symbol mismatch for "
+                        f"trade_halt_id {trade_halt_id}: "
+                        f"{existing_symbol} != "
+                        f"{params['symbol']}"
+                    )
+
+                if (
+                    existing_halt_start
+                    != params["halt_start"]
+                ):
+
+                    raise RuntimeError(
+                        "CORE halt_start mismatch for "
+                        f"trade_halt_id {trade_halt_id}: "
+                        f"{existing_halt_start} != "
+                        f"{params['halt_start']}"
+                    )
+
+                desired_issue_name = (
+                    prefer_new_value(
+                        existing_issue_name,
+                        params["issue_name"]
+                    )
+                )
+
+                desired_market = (
+                    prefer_new_value(
+                        existing_market,
+                        params["market"]
+                    )
+                )
+
+                desired_reason_code = (
+                    prefer_new_value(
+                        existing_reason_code,
+                        params["reason_code"]
+                    )
+                )
+
+                desired_halt_end = (
+                    prefer_new_value(
+                        existing_halt_end,
+                        params["halt_end"]
+                    )
+                )
+
+                desired_duration_minutes = (
+                    prefer_new_value(
+                        existing_duration_minutes,
+                        params["duration_minutes"]
+                    )
+                )
+
+                desired_halt_close_status = (
+                    prefer_close_status(
+                        existing_halt_close_status,
+                        params["halt_close_status"]
+                    )
+                )
+
+                has_changes = any(
+                    (
+                        desired_issue_name
+                        != existing_issue_name,
+
+                        desired_market
+                        != existing_market,
+
+                        desired_reason_code
+                        != existing_reason_code,
+
+                        desired_halt_end
+                        != existing_halt_end,
+
+                        desired_duration_minutes
+                        != existing_duration_minutes,
+
+                        desired_halt_close_status
+                        != existing_halt_close_status,
+                    )
+                )
+
+                if has_changes:
+
+                    update_params = {
+                        "id":
+                            core_id,
+
+                        "issue_name":
+                            desired_issue_name,
+
+                        "market":
+                            desired_market,
+
+                        "reason_code":
+                            desired_reason_code,
+
+                        "halt_end":
+                            desired_halt_end,
+
+                        "duration_minutes":
+                            desired_duration_minutes,
+
+                        "halt_close_status":
+                            desired_halt_close_status,
+                    }
+
+                    cur.execute(
+                        update_sql,
+                        update_params
+                    )
+
+                    if cur.rowcount != 1:
+
+                        raise RuntimeError(
+                            "Unexpected CORE UPDATE row count "
+                            f"for id {core_id}: "
+                            f"{cur.rowcount}"
+                        )
+
+                    updated += 1
+
+                else:
+
+                    unchanged += 1
+
+                # L'identifiant séquentiel du calculateur est
+                # volontairement conservé tel qu'il a été créé.
+                _ = existing_collector_episode_id
+
     return (
         inserted,
-        existing,
+        updated,
+        unchanged,
     )
 
 
@@ -702,6 +1097,12 @@ def persist_nasdaq_halts(
 
     Toute erreur provoque le rollback de l'ensemble de
     l'opération.
+
+    La V0.8 distingue pour RAW et CORE :
+
+        inserted
+        updated
+        unchanged
     """
 
     print()
@@ -720,7 +1121,8 @@ def persist_nasdaq_halts(
 
         (
             raw_inserted,
-            raw_existing,
+            raw_updated,
+            raw_unchanged,
             raw_ids,
         ) = write_trade_halts(
             conn,
@@ -729,7 +1131,8 @@ def persist_nasdaq_halts(
 
         (
             core_inserted,
-            core_existing,
+            core_updated,
+            core_unchanged,
         ) = write_halt_episodes(
             conn,
             episodes,
@@ -742,7 +1145,11 @@ def persist_nasdaq_halts(
     )
 
     print(
-        f"RAW existing          : {raw_existing}"
+        f"RAW updated           : {raw_updated}"
+    )
+
+    print(
+        f"RAW unchanged         : {raw_unchanged}"
     )
 
     print(
@@ -750,7 +1157,11 @@ def persist_nasdaq_halts(
     )
 
     print(
-        f"CORE existing         : {core_existing}"
+        f"CORE updated          : {core_updated}"
+    )
+
+    print(
+        f"CORE unchanged        : {core_unchanged}"
     )
 
     print()
@@ -763,12 +1174,18 @@ def persist_nasdaq_halts(
         "raw_inserted":
             raw_inserted,
 
-        "raw_existing":
-            raw_existing,
+        "raw_updated":
+            raw_updated,
+
+        "raw_unchanged":
+            raw_unchanged,
 
         "core_inserted":
             core_inserted,
 
-        "core_existing":
-            core_existing,
+        "core_updated":
+            core_updated,
+
+        "core_unchanged":
+            core_unchanged,
     }
