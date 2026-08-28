@@ -1,4 +1,4 @@
-# QuantLab — Nasdaq Halt Collector
+﻿# QuantLab — Nasdaq Halt Collector
 
 ## ARCHITECTURE.md
 
@@ -1627,6 +1627,47 @@ La V0.4 du collecteur historique fournit :
 - suivi des échecs;
 - arrêt fail-fast sur une date non acquise;
 - protection contre les dates futures.
+
+---
+
+## 30. V0.9-B — Optimisation de performance PostgreSQL
+
+La V0.9-B optimise la persistance PostgreSQL introduite en V0.8, sans modifier sa sémantique fonctionnelle.
+
+Les principes fonctionnels sont inchangés :
+
+- idempotence;
+- clé naturelle RAW;
+- relation RAW → CORE;
+- conservation des valeurs existantes;
+- protection contre les valeurs NULL régressives;
+- compteurs inserted / updated / unchanged;
+- transaction PostgreSQL commune.
+
+La V0.9-B remplace les opérations CORE individuelles par des opérations batch afin de réduire fortement le nombre d'allers-retours entre Python et PostgreSQL.
+
+### Performance observée
+
+Sur le dataset de validation de 1 065 événements :
+
+- V0.8 : environ 55 secondes;
+- optimisation RAW batch : environ 28,5 secondes;
+- V0.9-B : environ 1,36 seconde;
+- gain V0.9-B vs V0.8 : environ 20,9x.
+
+### Validation
+
+La validation fonctionnelle V0.9-B a produit les mêmes résultats que la version précédente :
+
+- RAW : 0 inserted / 0 updated / 1 065 unchanged;
+- CORE : 0 inserted / 0 updated / 1 065 unchanged;
+- QVCG : PASS;
+- BCARU : PASS;
+- événements bruts : 1 065;
+- épisodes HALT : 1 065;
+- durées calculables : 1 063.
+
+La V0.9-B est donc une optimisation interne de performance et ne modifie pas la définition métier des données.
 
 ---
 

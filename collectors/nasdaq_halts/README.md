@@ -1,4 +1,4 @@
-# Nasdaq Halt Collector
+﻿# Nasdaq Halt Collector
 
 The Nasdaq Halt Collector is a QuantLab data acquisition, processing and persistence component for Nasdaq trading halt information.
 
@@ -976,6 +976,38 @@ Additional live validation must examine:
 - long-term snapshot provenance requirements.
 
 The current strict RAW-to-CORE mapping remains fail-fast. If expanded historical or live data violates the current one-to-one assumption, the database model must be reviewed rather than silently approximated.
+
+## V0.9-B — PostgreSQL Persistence Performance
+
+V0.9-B optimizes PostgreSQL persistence introduced in V0.8 without changing the functional data model or business rules.
+
+The main change is batch persistence for CORE episodes, reducing the number of individual PostgreSQL round-trips.
+
+### Validation benchmark
+
+Validation dataset:
+
+- 1,065 events;
+- 1,065 HALT episodes;
+- 1,063 calculable durations.
+
+Observed execution time:
+
+- V0.8: approximately 55 seconds;
+- RAW batch optimization: approximately 28.5 seconds;
+- V0.9-B: approximately 1.36 seconds;
+- observed improvement versus V0.8: approximately 20.9x.
+
+Functional regression tests remain unchanged and pass:
+
+- QVCG: PASS;
+- BCARU: PASS;
+- RAW: 0 inserted / 0 updated / 1,065 unchanged;
+- CORE: 0 inserted / 0 updated / 1,065 unchanged.
+
+V0.9-B is therefore an internal persistence-performance optimization and does not redefine the Nasdaq Halt data model.
+
+---
 
 ## Platform Architecture
 

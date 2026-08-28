@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import csv
 
 from datetime import datetime, date, time, timedelta
@@ -1048,12 +1048,12 @@ if qvcg_metrics:
 if qvcg_test_passed:
 
     print()
-    print("QVCG TEST : PASS ✓")
+    print("QVCG TEST : PASS")
 
 else:
 
     print()
-    print("QVCG TEST : FAIL ✗")
+    print("QVCG TEST : FAIL")
 
 
 # ============================================================
@@ -1162,12 +1162,12 @@ if bcaru_metrics:
 if bcaru_test_passed:
 
     print()
-    print("BCARU TEST : PASS ✓")
+    print("BCARU TEST : PASS")
 
 else:
 
     print()
-    print("BCARU TEST : FAIL ✗")
+    print("BCARU TEST : FAIL")
 
 
 # ============================================================
@@ -1234,12 +1234,12 @@ print()
 
 print(
     f"QVCG TEST              : "
-    f"{'PASS ✓' if qvcg_test_passed else 'FAIL ✗'}"
+    f"{'PASS' if qvcg_test_passed else 'FAIL'}"
 )
 
 print(
     f"BCARU TEST             : "
-    f"{'PASS ✓' if bcaru_test_passed else 'FAIL ✗'}"
+    f"{'PASS' if bcaru_test_passed else 'FAIL'}"
 )
 
 print()
