@@ -4,16 +4,57 @@ from datetime import time
 
 # ============================================================
 # QUANTLAB - NASDAQ HALT EPISODES
-# VERSION 0.8
+# VERSION 0.9
 # ============================================================
 
-VERSION = "0.8"
+VERSION = "0.9"
 
 MARKET_CLOSE = time(
     16,
     0,
     0
 )
+
+
+# ============================================================
+# NORMALISATION DES MARCHÉS
+# ============================================================
+
+MARKET_ALIASES = {
+    "Q": "NASDAQ",
+    "NASDAQ": "NASDAQ",
+    "N": "NYSE",
+    "NYSE": "NYSE",
+    "A": "AMEX",
+    "AMEX": "AMEX",
+}
+
+
+def normalize_market(market):
+    """
+    Normalise les alias de marché connus.
+
+    Les valeurs RAW originales ne sont jamais modifiées.
+
+    Alias connus :
+
+        Q      -> NASDAQ
+        NASDAQ -> NASDAQ
+        N      -> NYSE
+        NYSE   -> NYSE
+        A      -> AMEX
+        AMEX   -> AMEX
+
+    Les autres marchés sont conservés tels quels.
+    """
+
+    if market is None:
+        return None
+
+    return MARKET_ALIASES.get(
+        market,
+        market
+    )
 
 
 # ============================================================
@@ -28,13 +69,27 @@ def build_halt_episodes(
     Construit les épisodes HALT à partir des événements
     Nasdaq normalisés.
 
-    La logique reproduit le comportement validé de
-    calculate_halt_metrics.py V0.7.
+    VERSION 0.9 :
 
-    Un événement fait partie du même épisode si :
+    Les événements sont regroupés selon :
 
-    - son halt_start est identique au début courant;
-    - ou son halt_start chevauche l'épisode courant.
+        symbol
+        market normalisé
+        reason_code
+
+    Les alias de marché connus sont donc regroupés :
+
+        Q / NASDAQ -> NASDAQ
+        N / NYSE   -> NYSE
+        A / AMEX   -> AMEX
+
+    Les autres marchés restent distincts.
+
+    Deux événements appartenant au même groupe font partie
+    du même épisode si :
+
+    - leur halt_start est identique;
+    - ou leur halt_start chevauche l'épisode courant.
 
     Retourne :
 
@@ -42,7 +97,7 @@ def build_halt_episodes(
         statistics
     """
 
-    events_by_symbol = defaultdict(
+    events_by_group = defaultdict(
         list
     )
 
@@ -50,8 +105,18 @@ def build_halt_episodes(
 
         if event["halt_start"] is not None:
 
-            events_by_symbol[
-                event["symbol"]
+            market = normalize_market(
+                event["market"]
+            )
+
+            key = (
+                event["symbol"],
+                market,
+                event["reason_code"],
+            )
+
+            events_by_group[
+                key
             ].append(
                 event
             )
@@ -63,7 +128,11 @@ def build_halt_episodes(
 
     episodes = []
 
-    for symbol, events in events_by_symbol.items():
+    for (
+        symbol,
+        market,
+        reason_code,
+    ), events in events_by_group.items():
 
         events.sort(
             key=lambda x: x["halt_start"]
@@ -95,10 +164,10 @@ def build_halt_episodes(
                         event["issue_name"],
 
                     "market":
-                        event["market"],
+                        market,
 
                     "reason_code":
-                        event["reason_code"],
+                        reason_code,
 
                     "halt_start":
                         start,
@@ -175,10 +244,10 @@ def build_halt_episodes(
                         event["issue_name"],
 
                     "market":
-                        event["market"],
+                        market,
 
                     "reason_code":
-                        event["reason_code"],
+                        reason_code,
 
                     "halt_start":
                         start,
@@ -315,12 +384,12 @@ def build_halt_episodes(
 
         else:
 
-            # -----------------------------------------------
+            # ------------------------------------------------
             # Episode multi-day.
             #
             # Le statut de clôture détaillé est calculé
             # au niveau DAILY.
-            # -----------------------------------------------
+            # ------------------------------------------------
 
             episode[
                 "halt_at_close"
