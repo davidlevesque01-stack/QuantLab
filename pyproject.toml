@@ -4,8 +4,27 @@ version = "0.1.0"
 description = "QuantLab financial data collection and analytics platform"
 requires-python = ">=3.14"
 dependencies = [
-    "psycopg[binary]>=3.3,<4"
+    "psycopg[binary]>=3.3,<4",
+    "openpyxl>=3.1,<4"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9,<10"
 ]
 
 [tool.quantlab]
 environment = "DEV"
+
+[tool.setuptools.packages.find]
+include = [
+    "analytics*",
+    "collectors*",
+    "orchestration*",
+    "shared*",
+    "ui*"
+]
+exclude = [
+    "database*",
+    "logs*"
+]
