@@ -1067,3 +1067,119 @@ def test_metric_10_multiple_halts_same_observation_day():
     )
 
     assert result.metric_10 == "Yes"
+
+def test_metric_11_no_halt_on_observation_day():
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 28),
+            lookback_months=None,
+            reason_codes=("LUDP",),
+        ),
+        episodes=[],
+    )
+
+    assert result.metric_10 == "No"
+    assert result.metric_11 == 0
+
+
+def test_metric_11_one_halt_on_observation_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 28),
+            lookback_months=None,
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    assert result.metric_10 == "Yes"
+    assert result.metric_11 == 1
+
+
+def test_metric_11_two_distinct_core_episodes_on_observation_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 11, 0),
+            "halt_end": datetime(2026, 8, 28, 11, 5),
+            "end_time": datetime(2026, 8, 28, 11, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 28),
+            lookback_months=None,
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    assert result.metric_10 == "Yes"
+    assert result.metric_11 == 2
+
+
+def test_metric_11_previous_day_only_returns_zero():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 28),
+            lookback_months=None,
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    assert result.metric_10 == "No"
+    assert result.metric_11 == 0
+
+
+def test_metric_11_multiday_episode_active_on_observation_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 14, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 0),
+            "end_time": datetime(2026, 8, 28, 10, 0),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 28),
+            lookback_months=None,
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    assert result.metric_10 == "Yes"
+    assert result.metric_11 == 1

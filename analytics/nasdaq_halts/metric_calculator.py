@@ -102,6 +102,12 @@ def calculate_metrics(
 
     metric_10 = "Yes" if observation_day is not None else "No"
 
+    metric_11 = (
+        observation_day.episode_count
+        if observation_day is not None
+        else 0
+    )
+
     return AnalysisResult(
         ticker=dataset.ticker,
         observation_date=observation_date,
@@ -118,6 +124,7 @@ def calculate_metrics(
         metric_8=metric_8,
         metric_9=metric_9,
         metric_10=metric_10,
+        metric_11=metric_11,
     )
 
 
