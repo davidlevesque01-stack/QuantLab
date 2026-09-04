@@ -91,6 +91,17 @@ def calculate_metrics(
 
     metric_9 = dataset.halt_at_close_day_count
 
+    observation_day = next(
+        (
+            halt_day
+            for halt_day in dataset.halt_days
+            if halt_day.trading_date == observation_date
+        ),
+        None,
+    )
+
+    metric_10 = "Yes" if observation_day is not None else "No"
+
     return AnalysisResult(
         ticker=dataset.ticker,
         observation_date=observation_date,
@@ -106,6 +117,7 @@ def calculate_metrics(
         metric_7=metric_7,
         metric_8=metric_8,
         metric_9=metric_9,
+        metric_10=metric_10,
     )
 
 
