@@ -53,7 +53,7 @@ def build_historical_dataset(
 
     for episode in episodes:
         trading_date = _episode_date(episode)
-        if trading_date >= req.observation_date:
+        if trading_date > req.observation_date:
             continue
         if start_date is not None and trading_date < start_date:
             continue

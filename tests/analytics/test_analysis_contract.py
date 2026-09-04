@@ -16,7 +16,7 @@ def test_request_normalization():
     assert request.reason_codes == ("LUDP", "M")
 
 
-def test_historical_data_excludes_observation_day():
+def test_historical_data_includes_observation_day():
     request = AnalysisRequest(
         ticker="ABCD",
         observation_date=date(2026, 8, 28),
@@ -31,12 +31,16 @@ def test_historical_data_excludes_observation_day():
             "trading_date": date(2026, 8, 28),
             "end_time": datetime(2026, 8, 28, 16, 1),
         },
+        {
+            "trading_date": date(2026, 8, 29),
+            "end_time": datetime(2026, 8, 29, 16, 1),
+        },
     ]
 
     result = AnalysisService().analyze(request, episodes=episodes)
 
     assert result.lookback_end == date(2026, 8, 28)
-    assert result.metric_1 == 1
+    assert result.metric_1 == 2
 
 
 def test_results_contract_contains_all_metrics():

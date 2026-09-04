@@ -1,4 +1,4 @@
-﻿# QuantLab – Nasdaq HALT Application Requirements
+# QuantLab – Nasdaq HALT Application Requirements
 
 **Version:** V1.0
 **Status:** Functional requirements
@@ -92,11 +92,11 @@ The metrics shall be displayed in the GUI in a format equivalent to the output-f
 
 ### 4.1 Historical / Predictive Features
 
-Metrics 1–9 use only information available before observation date `T`.
+Metrics 1–9 use only information available before observation date `T`, inclusive.
 
 Historical window:
 
-`T-X months → before T`
+`T-X months → through T, inclusive`
 
 where:
 - `X = 36 months` by default
@@ -224,7 +224,7 @@ Even when multiple selected reason codes occur in the same continuous episode, t
 
 ## 8. Temporal Integrity
 
-Metrics 1–9 are historical/predictive features and shall use only information available before `T`.
+Metrics 1–9 are historical/predictive features and shall use the historical window ending on `T`, inclusive.
 
 Metric 10 and Metric 11 explicitly use day `T`.
 
@@ -260,7 +260,7 @@ The application is compliant when:
 9. XLSX and CSV input are supported.
 10. XLSX is the default output.
 11. One output row is produced per input ticker/date observation.
-12. Metrics 1–9 use the historical window before T.
+12. Metrics 1–9 use the historical window ending on T, inclusive.
 13. Metrics 10–11 use observation day T.
 14. Continuous HALTs are counted as one episode regardless of reason-code multiplicity or duplicate/overlapping RAW records.
 15. Sequential days use trading sessions rather than calendar dates.

@@ -1,4 +1,4 @@
-﻿# QuantLab â€“ Nasdaq HALT Metrics Specification
+# QuantLab – Nasdaq HALT Metrics Specification
 
 **Version:** V0.8
 **Status:** Analytical reference specification
@@ -7,8 +7,8 @@
 
 This document defines the official calculation rules for the 11 Nasdaq HALT metrics used by the QuantLab HALT application.
 
-Metrics 1â€“9 are **Historical / Predictive Features**.
-Metrics 10â€“11 are **Observation-Day Features**.
+Metrics 1–9 are **Historical / Predictive Features**.
+Metrics 10–11 are **Observation-Day Features**.
 
 ## 2. Observation Context
 
@@ -40,15 +40,15 @@ If Period is empty, the historical window begins at the oldest available databas
 
 ### 2.3 Historical Window
 
-Metrics 1â€“9 use:
+Metrics 1–9 use:
 
-`T-X months â†’ before T`
+`T-X months → through T, inclusive`
 
-The observation day `T` is excluded from Metrics 1â€“9.
+The observation day `T` is included in Metrics 1–9.
 
 ### 2.4 Observation-Day Window
 
-Metrics 10â€“11 use observation day `T`.
+Metrics 10–11 use observation day `T`.
 
 ## 3. HALT Episode Basis
 
@@ -66,8 +66,8 @@ Multiple RAW events, reason codes, duplicate starts, overlapping records, or a N
 
 Example:
 
-`LUDP 10:45:00 â†’ 10:55:12`
-`M 10:45:00 â†’ 10:55:12`
+`LUDP 10:45:00 → 10:55:12`
+`M 10:45:00 → 10:55:12`
 
 Result:
 
@@ -79,8 +79,8 @@ Both reason codes may remain as descriptive attributes.
 
 Example:
 
-`ABC 12:45:56 â†’ NULL`
-`ABC 12:45:56 â†’ 13:23:12`
+`ABC 12:45:56 → NULL`
+`ABC 12:45:56 → 13:23:12`
 
 Result:
 
@@ -92,7 +92,7 @@ If no valid end exists, `halt_end = NULL`.
 
 ## 4. Historical / Predictive Metrics
 
-### Metric 1 â€” Number of Halt Days
+### Metric 1 — Number of Halt Days
 
 Number of distinct trading days in the historical window on which the ticker experienced at least one qualifying HALT.
 
@@ -100,7 +100,7 @@ Number of distinct trading days in the historical window on which the ticker exp
 
 Multiple HALTs on one trading day count once.
 
-### Metric 2 â€” Average Halts per Halt Day
+### Metric 2 — Average Halts per Halt Day
 
 `Total qualifying CORE HALT episodes / Number of Halt Days`
 
@@ -110,7 +110,7 @@ If Number of Halt Days is zero:
 
 Multiple reason codes for one continuous episode count once.
 
-### Metric 3 â€” Days Since Last Halt
+### Metric 3 — Days Since Last Halt
 
 Number of calendar days between the most recent Halt Day and `T`.
 
@@ -120,7 +120,7 @@ If no qualifying HALT occurred in the historical window:
 
 `N/A`
 
-### Metric 4 â€” Average Time Between Halt Days
+### Metric 4 — Average Time Between Halt Days
 
 Average number of calendar days between consecutive distinct Halt Days.
 
@@ -128,17 +128,17 @@ If fewer than two Halt Days are available:
 
 `N/A`
 
-### Metric 5 â€” Sequential Halt Days Identified
+### Metric 5 — Sequential Halt Days Identified
 
 `Yes` when at least two consecutive trading sessions contain a qualifying HALT; otherwise `No`.
 
 Weekends and market holidays do not interrupt a sequential block.
 
-### Metric 6 â€” Number of Sequential Halt-Day Blocks
+### Metric 6 — Number of Sequential Halt-Day Blocks
 
 Number of distinct blocks containing at least two consecutive trading days with a qualifying HALT.
 
-### Metric 7 â€” Average Sequential Block Length
+### Metric 7 — Average Sequential Block Length
 
 Average number of trading days across all sequential Halt-Day blocks.
 
@@ -146,7 +146,7 @@ If no sequential block exists:
 
 `N/A`
 
-### Metric 8 â€” Maximum Sequential Block Length
+### Metric 8 — Maximum Sequential Block Length
 
 Maximum number of consecutive trading days in any sequential Halt-Day block.
 
@@ -154,7 +154,7 @@ If no sequential block exists:
 
 `N/A`
 
-### Metric 9 â€” Number of Halt Days at Close
+### Metric 9 — Number of Halt Days at Close
 
 Number of distinct trading days in the historical window for which the ticker remained in HALT at market close.
 
@@ -166,7 +166,7 @@ A multi-day episode may contribute one Halt-at-Close day for each trading day on
 
 Example:
 
-`Monday 14:30 â†’ Wednesday 10:00`
+`Monday 14:30 → Wednesday 10:00`
 
 contributes:
 - Monday = Halt at close
@@ -179,11 +179,11 @@ Result:
 
 ## 5. Observation-Day Metrics
 
-### Metric 10 â€” Did the Ticker HALT the Specified Day?
+### Metric 10 — Did the Ticker HALT the Specified Day?
 
 `Yes` if at least one qualifying CORE HALT episode occurred on `T`; otherwise `No`.
 
-### Metric 11 â€” Number of HALTs on the Specified Day
+### Metric 11 — Number of HALTs on the Specified Day
 
 If Metric 10 = `Yes`, return the number of qualifying CORE HALT episodes during `T`.
 
@@ -207,12 +207,12 @@ If several selected reason codes occur in the same continuous episode, that epis
 
 ## 7. Temporal Integrity / Look-Ahead Prevention
 
-Metrics 1â€“9 shall use only information available before `T`.
+Metrics 1–9 shall use the historical window ending on `T`, inclusive.
 
 Therefore:
-- events after `T` cannot influence Metrics 1â€“9;
-- `T` itself is excluded from Metrics 1â€“9;
-- Metrics 10â€“11 explicitly use `T`.
+- events after `T` cannot influence Metrics 1–9;
+- `T` itself is included in Metrics 1–9;
+- Metrics 10–11 explicitly use `T`.
 
 This distinction is mandatory for future predictive-model use.
 
@@ -242,6 +242,6 @@ The output metric columns shall appear in this order:
 
 ## 10. Batch Calculation Principle
 
-For each ticker/date/reason-code context, Metrics 1â€“9 should be derived from a reusable historical HALT dataset rather than independently re-reading and recalculating the same source data for each metric.
+For each ticker/date/reason-code context, Metrics 1–9 should be derived from a reusable historical HALT dataset rather than independently re-reading and recalculating the same source data for each metric.
 
 The implementation shall support potentially large batch files and should reuse overlapping historical calculations where practical without changing metric results.

@@ -55,7 +55,7 @@ def test_metric_1_multiple_episodes_same_day_count_once():
     assert result.metric_1 == 2
 
 
-def test_metric_1_observation_day_is_excluded():
+def test_metric_1_observation_day_is_included():
     episodes = [
         {
             "trading_date": date(2026, 8, 27),
@@ -69,7 +69,7 @@ def test_metric_1_observation_day_is_excluded():
 
     result = AnalysisService().analyze(_request(), episodes=episodes)
 
-    assert result.metric_1 == 1
+    assert result.metric_1 == 2
 
 
 def test_metric_1_is_distinct_by_trading_date():
@@ -103,3 +103,56 @@ def test_metrics_2_to_11_remain_unimplemented():
     assert result.metric_1 == 0
     for number in range(2, 12):
         assert getattr(result, f"metric_{number}") is None
+
+def test_metric_1_multiple_halt_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 6, 8),
+            "end_time": datetime(2026, 6, 8, 15, 22),
+        },
+        {
+            "trading_date": date(2026, 7, 6),
+            "end_time": datetime(2026, 7, 6, 9, 46),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="HKIT",
+            observation_date=date(2026, 7, 6),
+            lookback_months=1,
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    assert result.metric_1 == 2
+
+
+def test_metric_1_multiple_halt_days_and_multiple_episodes_same_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 6, 8),
+            "end_time": datetime(2026, 6, 8, 15, 22),
+        },
+        {
+            "trading_date": date(2026, 7, 6),
+            "end_time": datetime(2026, 7, 6, 9, 46),
+        },
+        {
+            "trading_date": date(2026, 7, 6),
+            "end_time": datetime(2026, 7, 6, 10, 30),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="HKIT",
+            observation_date=date(2026, 7, 6),
+            lookback_months=1,
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    assert result.metric_1 == 2

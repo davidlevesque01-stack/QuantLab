@@ -21,6 +21,10 @@ from PySide6.QtWidgets import (
 )
 
 from ui.nasdaq_halts.file_validation import validate_input_file
+from analytics.nasdaq_halts.analysis_service import AnalysisService
+from analytics.nasdaq_halts.core_source import NasdaqHaltCoreSource
+from analytics.nasdaq_halts.models import AnalysisRequest
+from ui.nasdaq_halts.results_page import ResultsPage
 
 
 REASON_CODES = ["LUDP", "M", "T1", "T2", "T3", "T12", "D", "H11"]
@@ -34,6 +38,11 @@ class MainWindow(QMainWindow):
         self.setFixedSize(620, 500)
 
         self._selected_file_path = ""
+        self.analysis_service = AnalysisService(
+                core_source=NasdaqHaltCoreSource()
+            )
+        self.results_page = ResultsPage(self._show_manual_page)
+
 
         self.stack = QStackedWidget()
         self.manual_page = self._build_manual_page()
@@ -41,6 +50,7 @@ class MainWindow(QMainWindow):
 
         self.stack.addWidget(self.manual_page)
         self.stack.addWidget(self.file_page)
+        self.stack.addWidget(self.results_page)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -288,27 +298,77 @@ class MainWindow(QMainWindow):
 
     def _validate_manual_input(self) -> None:
         ticker = self.ticker_edit.text().strip()
+
         if not ticker:
-            QMessageBox.warning(self, "Input validation", "Ticker is required.")
+            QMessageBox.warning(
+                self,
+                "Input validation",
+                "Ticker is required.",
+            )
             self.ticker_edit.setFocus()
             return
 
-        if not self._selected_reason_codes(self.reason_list):
+        reason_codes = self._selected_reason_codes(self.reason_list)
+
+        if not reason_codes:
             QMessageBox.warning(
-                self, "Input validation",
-                "At least one HALT reason code must be selected."
+                self,
+                "Input validation",
+                "At least one HALT reason code must be selected.",
             )
             return
 
-        period = self.period_edit.text().strip() or "all available historical data"
-        QMessageBox.information(
-            self, "Input validation",
-            "Manual input is valid.\n\n"
-            f"Ticker: {ticker}\n"
-            f"Observation Date: {self.start_date_edit.date().toString('dd/MM/yyyy')}\n"
-            f"Historical Period: {period}\n"
-            f"HALT Reason Code: {', '.join(self._selected_reason_codes(self.reason_list))}"
+        observation_date = self.start_date_edit.date().toPython()
+        period_text = self.period_edit.text().strip()
+        lookback_months = int(period_text) if period_text else None
+
+        request = AnalysisRequest(
+            ticker=ticker,
+            observation_date=observation_date,
+            lookback_months=lookback_months,
+            reason_codes=tuple(reason_codes),
         )
+
+        try:
+            result = self.analysis_service.analyze(request)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Analysis error",
+                f"The analysis could not be completed.\n\n{exc}",
+            )
+            return
+
+        self.results_page.set_observation_context(
+            ticker=result.ticker,
+            observation_date=result.observation_date.strftime("%d/%m/%Y"),
+            period=(
+                f"{lookback_months} months"
+                if lookback_months is not None
+                else "All available historical data"
+            ),
+            reasons=", ".join(result.reason_codes),
+        )
+
+        values = {
+            "Metric 1": result.metric_1,
+            "Metric 2": result.metric_2,
+            "Metric 3": result.metric_3,
+            "Metric 4": result.metric_4,
+            "Metric 5": result.metric_5,
+            "Metric 6": result.metric_6,
+            "Metric 7": result.metric_7,
+            "Metric 8": result.metric_8,
+            "Metric 9": result.metric_9,
+            "Metric 10": result.metric_10,
+            "Metric 11": result.metric_11,
+        }
+
+        self.results_page.set_values(values)
+        self.stack.setCurrentWidget(self.results_page)
+
+    def _show_manual_page(self) -> None:
+        self.stack.setCurrentWidget(self.manual_page)
 
     def _validate_file_input(self) -> None:
         path = self._selected_file_path
