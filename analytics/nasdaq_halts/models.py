@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
@@ -12,7 +12,7 @@ class AnalysisRequest:
     ticker: str
     observation_date: date
     lookback_months: int | None = 36
-    reason_codes: tuple[str, ...] = ("LULD",)
+    reason_codes: tuple[str, ...] = ("LUDP",)
 
     def normalized(self) -> "AnalysisRequest":
         ticker = self.ticker.strip().upper()

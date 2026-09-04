@@ -195,7 +195,7 @@ Multiple reason codes for one continuous episode count once.
 
 Default selection:
 
-`LULD`
+`LUDP`
 
 The application supports:
 - a single reason code

@@ -1,4 +1,4 @@
-# QuantLab – Nasdaq HALT Application Requirements
+﻿# QuantLab – Nasdaq HALT Application Requirements
 
 **Version:** V1.0
 **Status:** Functional requirements
@@ -45,7 +45,7 @@ The GUI shall be in English.
 
 **HALT reason code**
 - List of Nasdaq HALT reason codes
-- Default = LULD
+- Default = LUDP
 - Supports a single code or aggregation of multiple codes
 - Selected codes determine which HALT episodes qualify
 
@@ -212,7 +212,7 @@ If no valid end exists, CORE `halt_end` remains NULL.
 
 ## 7. Reason-Code Filtering
 
-The default HALT reason selection is `LULD`.
+The default HALT reason selection is `LUDP`.
 
 The application shall support:
 - one reason code
@@ -255,7 +255,7 @@ The application is compliant when:
 4. Start Date defaults to today.
 5. Period defaults to 36 months and is configurable.
 6. Empty Period uses the oldest available database date before T.
-7. LULD is the default reason selection.
+7. LUDP is the default reason selection.
 8. Single and multiple reason selections are supported.
 9. XLSX and CSV input are supported.
 10. XLSX is the default output.

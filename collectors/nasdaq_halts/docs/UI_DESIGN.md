@@ -189,7 +189,7 @@ Multi-select list.
 
 Default:
 
-`LULD`
+`LUDP`
 
 The control shall support:
 
@@ -217,7 +217,7 @@ Multiple selected codes represent an OR qualification.
 | [ 36                                                       ] |
 |                                                               |
 | HALT Reason Code                                              |
-| [ LULD                                                     v] |
+| [ LUDP                                                     v] |
 |                                                               |
 |                                                               |
 |                    [ CALCULATE ]                              |
@@ -238,11 +238,14 @@ Example:
 HALT Reason Code
 
 +---------------------------+
-| --- LULD                    |
+| --- LUDP                    |
 | --- M                       |
 | --- T1                      |
 | --- T2                      |
-| --- ...                     |
+| --- T3                      |
+| --- T12                     |
+| --- D                       |
+| --- H11                     |
 +---------------------------+
 ```
 
@@ -251,7 +254,7 @@ qualification context.
 
 Example:
 
-`LULD, M, T1`
+`LUDP, M, T1`
 
 The UI shall pass the selected codes to the analytical service.
 
@@ -329,7 +332,7 @@ Example:
 | Ticker              ABCD                                     |
 | Observation Date    04/09/2026                               |
 | Historical Period   36 months                                |
-| HALT Reason         LULD                                     |
+| HALT Reason         LUDP                                     |
 |                                                               |
 | Preparing historical data...                                  |
 |                                                               |
@@ -387,7 +390,7 @@ Example:
 | Ticker              ABCD                                     |
 | Observation Date    04/09/2026                               |
 | Historical Period   36 months                                |
-| HALT Reason         LULD                                     |
+| HALT Reason         LUDP                                     |
 +---------------------------------------------------------------+
 | Metric                                      | Value           |
 +----------------------------------------------+----------------+
@@ -459,7 +462,7 @@ Each row represents one observation.
 | [ 36                                                        ] |
 |                                                               |
 | HALT Reason Code                                              |
-| [ LULD                                                     v] |
+| [ LUDP                                                     v] |
 |                                                               |
 |                                                               |
 |                 [ VALIDATE FILE ]                             |
@@ -705,7 +708,7 @@ The following are included:
 - CSV separator selection
 - configurable historical period
 - default 36-month period
-- default LULD reason selection
+- default LUDP reason selection
 - multiple reason-code selection
 - manual metric display
 - batch calculation
@@ -738,5 +741,3 @@ The following are outside the V1 UI scope:
 7. Keep future automatic acquisition independent from the UI.
 8. Do not introduce functional requirements that are not defined by the
    application requirements or metric specification.
-
-

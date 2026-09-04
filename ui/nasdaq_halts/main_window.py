@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QIntValidator
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from ui.nasdaq_halts.file_validation import validate_input_file
 
 
-REASON_CODES = ["LULD", "M", "T1", "T2"]
+REASON_CODES = ["LUDP", "M", "T1", "T2", "T3", "T12", "D", "H11"]
 
 
 class MainWindow(QMainWindow):
@@ -228,7 +228,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(code)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(
-                Qt.CheckState.Checked if code == "LULD"
+                Qt.CheckState.Checked if code == "LUDP"
                 else Qt.CheckState.Unchecked
             )
             widget.addItem(item)
