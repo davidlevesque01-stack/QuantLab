@@ -628,21 +628,6 @@ def test_metric_7_average_length_of_multiple_blocks():
     assert result.metric_7 == 2.5
 
 
-def test_metrics_8_to_11_remain_unimplemented():
-    result = AnalysisService().analyze(_request(), episodes=[])
-
-    assert result.metric_1 == 0
-    assert result.metric_2 == "N/A"
-    assert result.metric_3 == "N/A"
-    assert result.metric_4 == "N/A"
-    assert result.metric_5 == "No"
-    assert result.metric_6 == 0
-    assert result.metric_7 == "N/A"
-
-    for number in range(8, 12):
-        assert getattr(result, f"metric_{number}") is None
-
-
 def test_metric_1_multiple_halt_days():
     episodes = [
         {
@@ -717,3 +702,116 @@ def test_metric_1_multiday_episode_counts_trading_sessions_only():
     result = AnalysisService().analyze(request, episodes=episodes)
 
     assert result.metric_1 == 3
+
+def test_metric_8_no_sequential_blocks():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_8 == "N/A"
+
+
+def test_metric_8_one_block_of_two_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_8 == 2
+
+
+def test_metric_8_returns_longest_block():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    # Blocks: Mon-Tue = 2 days, Thu-Fri = 2 days.
+    assert result.metric_8 == 2
+
+
+def test_metric_8_longest_of_two_and_three_day_blocks():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 31),
+            "halt_start": datetime(2026, 8, 31, 10, 0),
+            "halt_end": datetime(2026, 8, 31, 10, 5),
+            "end_time": datetime(2026, 8, 31, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 31),
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    # Blocks: Mon-Tue = 2 days, Thu-Fri-Mon = 3 days.
+    assert result.metric_8 == 3

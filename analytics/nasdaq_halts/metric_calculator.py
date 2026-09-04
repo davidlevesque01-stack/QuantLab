@@ -83,6 +83,12 @@ def calculate_metrics(
         else "N/A"
     )
 
+    metric_8 = (
+        max(len(block) for block in sequential_blocks)
+        if sequential_blocks
+        else "N/A"
+    )
+
     return AnalysisResult(
         ticker=dataset.ticker,
         observation_date=observation_date,
@@ -96,6 +102,7 @@ def calculate_metrics(
         metric_5=metric_5,
         metric_6=metric_6,
         metric_7=metric_7,
+        metric_8=metric_8,
     )
 
 
