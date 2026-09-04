@@ -628,6 +628,142 @@ def test_metric_7_average_length_of_multiple_blocks():
     assert result.metric_7 == 2.5
 
 
+
+def test_metric_9_no_halt_days():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_9 == 0
+
+
+def test_metric_9_halt_ends_before_market_close():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 14, 0),
+            "halt_end": datetime(2026, 8, 28, 15, 30),
+            "end_time": datetime(2026, 8, 28, 15, 30),
+        }
+    ]
+
+    result = AnalysisService().analyze(_request(), episodes=episodes)
+
+    assert result.metric_9 == 0
+
+
+def test_metric_9_halt_active_after_market_close():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 14, 0),
+            "halt_end": datetime(2026, 8, 28, 16, 30),
+            "end_time": datetime(2026, 8, 28, 16, 30),
+        }
+    ]
+
+    result = AnalysisService().analyze(_request(), episodes=episodes)
+
+    assert result.metric_9 == 1
+
+
+def test_metric_9_halt_ending_exactly_at_close_is_not_at_close():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 14, 0),
+            "halt_end": datetime(2026, 8, 28, 16, 0),
+            "end_time": datetime(2026, 8, 28, 16, 0),
+        }
+    ]
+
+    result = AnalysisService().analyze(_request(), episodes=episodes)
+
+    assert result.metric_9 == 0
+
+
+def test_metric_9_multiday_episode_counts_each_trading_day_at_close():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 14, 0),
+            "halt_end": datetime(2026, 8, 31, 10, 0),
+            "end_time": datetime(2026, 8, 31, 10, 0),
+        }
+    ]
+
+    request = AnalysisRequest(
+        ticker="ABCD",
+        observation_date=date(2026, 8, 31),
+        lookback_months=None,
+        reason_codes=("LUDP",),
+    )
+
+    result = AnalysisService().analyze(request, episodes=episodes)
+
+    # Thu 27 and Fri 28: halted at close.
+    # Mon 31: resumed before close.
+    assert result.metric_9 == 2
+
+
+def test_metric_9_early_close_uses_calendar_close_time():
+    episodes = [
+        {
+            "trading_date": date(2026, 11, 27),
+            "halt_start": datetime(2026, 11, 27, 12, 0),
+            "halt_end": datetime(2026, 11, 27, 13, 30),
+            "end_time": datetime(2026, 11, 27, 13, 30),
+        }
+    ]
+
+    request = AnalysisRequest(
+        ticker="ABCD",
+        observation_date=date(2026, 11, 27),
+        lookback_months=None,
+        reason_codes=("LUDP",),
+    )
+
+    result = AnalysisService().analyze(request, episodes=episodes)
+
+    # The calendar supplies the early close for this session.
+    assert result.metric_9 == 1
+
+
+def test_metric_9_multiple_episodes_same_day_count_once():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 14, 0),
+            "halt_end": datetime(2026, 8, 28, 16, 30),
+            "end_time": datetime(2026, 8, 28, 16, 30),
+        },
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 15, 0),
+            "halt_end": datetime(2026, 8, 28, 17, 0),
+            "end_time": datetime(2026, 8, 28, 17, 0),
+        },
+    ]
+
+    result = AnalysisService().analyze(_request(), episodes=episodes)
+
+    assert result.metric_9 == 1
+
+
+def test_metric_9_observation_day_is_included():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 14, 0),
+            "halt_end": datetime(2026, 8, 28, 16, 30),
+            "end_time": datetime(2026, 8, 28, 16, 30),
+        }
+    ]
+
+    result = AnalysisService().analyze(_request(), episodes=episodes)
+
+    assert result.metric_9 == 2
+
+
+
 def test_metric_1_multiple_halt_days():
     episodes = [
         {

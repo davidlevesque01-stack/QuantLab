@@ -89,6 +89,8 @@ def calculate_metrics(
         else "N/A"
     )
 
+    metric_9 = dataset.halt_at_close_day_count
+
     return AnalysisResult(
         ticker=dataset.ticker,
         observation_date=observation_date,
@@ -103,6 +105,7 @@ def calculate_metrics(
         metric_6=metric_6,
         metric_7=metric_7,
         metric_8=metric_8,
+        metric_9=metric_9,
     )
 
 

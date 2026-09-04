@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Iterable, Protocol
 
-from shared.calendar.trading_calendar import get_trading_days
+from shared.calendar.trading_calendar import get_session_close, get_trading_days
 
 from .models import (
     AnalysisRequest,
@@ -121,7 +121,7 @@ def build_historical_dataset(
                 trading_date=trading_date,
                 episode_count=len(rows),
                 halted_at_close=any(
-                    _halted_at_close(row)
+                    _halted_at_close(row, trading_date)
                     for row in rows
                 ),
             )
@@ -216,23 +216,44 @@ def _to_datetime(value) -> datetime | None:
     )
 
 
-def _halted_at_close(episode: dict | EpisodeView) -> bool:
+def _halted_at_close(
+    episode: dict | EpisodeView,
+    trading_date: date,
+) -> bool:
+    """Return whether an episode was still active at that session's close.
+
+    The session close comes from the shared TradingCalendar, so normal
+    sessions use 16:00 while early-close sessions use their actual close
+    time.
+
+    An episode is considered active at close when its valid end occurs
+    strictly after the session close, or when no valid end exists.
+    """
+
+    session_close = get_session_close(trading_date)
+
+    if session_close is None:
+        return False
+
     if isinstance(episode, EpisodeView):
         end_time = episode.end_time
     else:
         if "halted_at_close" in episode:
-            return bool(episode["halted_at_close"])
+            explicit_value = episode["halted_at_close"]
+
+            if explicit_value is not None:
+                return bool(explicit_value)
 
         end_time = episode.get("end_time") or episode.get("halt_end")
+
+    end_time = _to_datetime(end_time)
 
     if end_time is None:
         return True
 
-    if isinstance(end_time, str):
-        end_time = datetime.fromisoformat(
-            end_time.replace("Z", "+00:00")
-        )
+    session_close_datetime = datetime.combine(
+        trading_date,
+        session_close,
+    )
 
-    # Provisional flag. Metric 9 will apply the approved
-    # trading-session close rules explicitly.
-    return end_time.hour >= 16
+    return end_time > session_close_datetime
