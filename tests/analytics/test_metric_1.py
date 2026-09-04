@@ -97,11 +97,549 @@ def test_metric_1_is_distinct_by_trading_date():
     assert result.metric_1 == 3
 
 
-def test_metrics_2_to_11_remain_unimplemented():
+def test_metric_2_no_halt_days():
     result = AnalysisService().analyze(_request(), episodes=[])
 
     assert result.metric_1 == 0
-    for number in range(2, 12):
+    assert result.metric_2 == "N/A"
+
+
+def test_metric_2_one_episode_one_halt_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 30),
+            "halt_end": datetime(2026, 8, 27, 10, 35),
+            "end_time": datetime(2026, 8, 27, 10, 35),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_1 == 1
+    assert result.metric_2 == 1.0
+
+
+def test_metric_2_three_episodes_over_two_halt_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 9, 0),
+            "halt_end": datetime(2026, 8, 25, 9, 5),
+            "end_time": datetime(2026, 8, 25, 9, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 26),
+            "halt_start": datetime(2026, 8, 26, 11, 0),
+            "halt_end": datetime(2026, 8, 26, 11, 5),
+            "end_time": datetime(2026, 8, 26, 11, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_1 == 2
+    assert result.metric_2 == 1.5
+
+
+def test_metric_2_multiday_episode_counts_one_core_episode():
+    episodes = [
+        {
+            "trading_date": date(2020, 3, 12),
+            "halt_start": datetime(2020, 3, 12, 11, 18, 33),
+            "halt_end": datetime(2020, 3, 16, 9, 45, 2),
+            "end_time": datetime(2020, 3, 16, 9, 45, 2),
+        },
+    ]
+
+    request = AnalysisRequest(
+        ticker="TESS",
+        observation_date=date(2020, 3, 16),
+        lookback_months=None,
+        reason_codes=("LUDP",),
+    )
+
+    result = AnalysisService().analyze(
+        request,
+        episodes=episodes,
+    )
+
+    assert result.metric_1 == 3
+    assert result.metric_2 == 1 / 3
+
+
+def test_metric_3_no_halt_days():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_1 == 0
+    assert result.metric_2 == "N/A"
+    assert result.metric_3 == "N/A"
+
+
+def test_metric_3_halt_on_observation_day():
+    episodes = [
+        {
+            "trading_date": OBSERVATION_DATE,
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_3 == 0
+
+
+def test_metric_3_halt_on_previous_calendar_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_3 == 1
+
+
+def test_metric_3_uses_calendar_days_not_trading_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 21),
+            "halt_start": datetime(2026, 8, 21, 10, 0),
+            "halt_end": datetime(2026, 8, 21, 10, 5),
+            "end_time": datetime(2026, 8, 21, 10, 5),
+        }
+    ]
+
+    request = AnalysisRequest(
+        ticker="ABCD",
+        observation_date=date(2026, 8, 24),
+        lookback_months=None,
+        reason_codes=("LUDP",),
+    )
+
+    result = AnalysisService().analyze(
+        request,
+        episodes=episodes,
+    )
+
+    assert result.metric_3 == 3
+
+
+def test_metric_3_uses_most_recent_halt_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 20),
+            "halt_start": datetime(2026, 8, 20, 10, 0),
+            "halt_end": datetime(2026, 8, 20, 10, 5),
+            "end_time": datetime(2026, 8, 20, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 11, 0),
+            "halt_end": datetime(2026, 8, 25, 11, 5),
+            "end_time": datetime(2026, 8, 25, 11, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_3 == 3
+
+
+def test_metric_5_no_halt_days():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_5 == "No"
+
+
+def test_metric_5_single_halt_day():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        }
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "No"
+
+
+def test_metric_5_consecutive_trading_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "Yes"
+
+
+def test_metric_5_weekend_does_not_break_sequence():
+    # Friday -> Monday are consecutive trading sessions.
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 21),
+            "halt_start": datetime(2026, 8, 21, 10, 0),
+            "halt_end": datetime(2026, 8, 21, 10, 5),
+            "end_time": datetime(2026, 8, 21, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "Yes"
+
+
+def test_metric_5_intervening_trading_day_breaks_sequence():
+    # Monday -> Wednesday: Tuesday is a trading session.
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 26),
+            "halt_start": datetime(2026, 8, 26, 10, 0),
+            "halt_end": datetime(2026, 8, 26, 10, 5),
+            "end_time": datetime(2026, 8, 26, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "No"
+
+
+def test_metric_6_no_sequential_blocks():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_5 == "No"
+    assert result.metric_6 == 0
+
+
+def test_metric_6_two_consecutive_halt_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "Yes"
+    assert result.metric_6 == 1
+
+
+def test_metric_6_three_consecutive_halt_days_form_one_block():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 26),
+            "halt_start": datetime(2026, 8, 26, 10, 0),
+            "halt_end": datetime(2026, 8, 26, 10, 5),
+            "end_time": datetime(2026, 8, 26, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "Yes"
+    assert result.metric_6 == 1
+
+
+def test_metric_6_two_separate_blocks():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "Yes"
+    assert result.metric_6 == 2
+
+
+def test_metric_6_weekend_does_not_split_block():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 21),
+            "halt_start": datetime(2026, 8, 21, 10, 0),
+            "halt_end": datetime(2026, 8, 21, 10, 5),
+            "end_time": datetime(2026, 8, 21, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "Yes"
+    assert result.metric_6 == 1
+
+
+def test_metric_6_intervening_trading_day_splits_blocks():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 26),
+            "halt_start": datetime(2026, 8, 26, 10, 0),
+            "halt_end": datetime(2026, 8, 26, 10, 5),
+            "end_time": datetime(2026, 8, 26, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_5 == "No"
+    assert result.metric_6 == 0
+
+
+def test_metric_7_no_sequential_blocks():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_7 == "N/A"
+
+
+def test_metric_7_one_block_of_two_days():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_7 == 2
+
+
+def test_metric_7_three_day_block():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 26),
+            "halt_start": datetime(2026, 8, 26, 10, 0),
+            "halt_end": datetime(2026, 8, 26, 10, 5),
+            "end_time": datetime(2026, 8, 26, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        _request(),
+        episodes=episodes,
+    )
+
+    assert result.metric_7 == 3
+
+
+def test_metric_7_average_length_of_multiple_blocks():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 24),
+            "halt_start": datetime(2026, 8, 24, 10, 0),
+            "halt_end": datetime(2026, 8, 24, 10, 5),
+            "end_time": datetime(2026, 8, 24, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 10, 0),
+            "halt_end": datetime(2026, 8, 25, 10, 5),
+            "end_time": datetime(2026, 8, 25, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 27),
+            "halt_start": datetime(2026, 8, 27, 10, 0),
+            "halt_end": datetime(2026, 8, 27, 10, 5),
+            "end_time": datetime(2026, 8, 27, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 28),
+            "halt_start": datetime(2026, 8, 28, 10, 0),
+            "halt_end": datetime(2026, 8, 28, 10, 5),
+            "end_time": datetime(2026, 8, 28, 10, 5),
+        },
+        {
+            "trading_date": date(2026, 8, 31),
+            "halt_start": datetime(2026, 8, 31, 10, 0),
+            "halt_end": datetime(2026, 8, 31, 10, 5),
+            "end_time": datetime(2026, 8, 31, 10, 5),
+        },
+    ]
+
+    result = AnalysisService().analyze(
+        AnalysisRequest(
+            ticker="ABCD",
+            observation_date=date(2026, 8, 31),
+            reason_codes=("LUDP",),
+        ),
+        episodes=episodes,
+    )
+
+    # Blocks: Mon-Tue = 2 days, Thu-Fri-Mon = 3 days.
+    assert result.metric_7 == 2.5
+
+
+def test_metrics_8_to_11_remain_unimplemented():
+    result = AnalysisService().analyze(_request(), episodes=[])
+
+    assert result.metric_1 == 0
+    assert result.metric_2 == "N/A"
+    assert result.metric_3 == "N/A"
+    assert result.metric_4 == "N/A"
+    assert result.metric_5 == "No"
+    assert result.metric_6 == 0
+    assert result.metric_7 == "N/A"
+
+    for number in range(8, 12):
         assert getattr(result, f"metric_{number}") is None
 
 

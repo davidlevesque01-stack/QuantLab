@@ -18,7 +18,7 @@ class CoreEpisodeSource(Protocol):
     """Minimal source contract required by the dataset builder.
 
     The concrete PostgreSQL implementation is intentionally not coupled
-    to this module in 22.6.2.
+    to this module.
     """
 
     def fetch_core_episodes(
@@ -49,13 +49,14 @@ def build_historical_dataset(
     by the episode. Weekends and market holidays are excluded through
     the shared TradingCalendar.
 
-    No Metric 1-11 formula is implemented here. This layer only normalizes
-    episodes into distinct historical trading days.
+    The dataset also retains the number of distinct CORE episodes that
+    contribute to the requested analytical window.
     """
 
     req = request.normalized()
     start_date = _lookback_start(req)
     grouped: dict[date, list[dict | EpisodeView]] = defaultdict(list)
+    core_episode_count = 0
 
     for episode in episodes:
         episode_start, episode_end = _episode_bounds(episode)
@@ -73,13 +74,29 @@ def build_historical_dataset(
         if last_date < first_date:
             last_date = first_date
 
-        for trading_date in get_trading_days(first_date, last_date):
-            if trading_date > req.observation_date:
-                continue
+        episode_trading_days = get_trading_days(
+            first_date,
+            last_date,
+        )
 
-            if start_date is not None and trading_date < start_date:
-                continue
+        included_dates = [
+            trading_date
+            for trading_date in episode_trading_days
+            if (
+                trading_date <= req.observation_date
+                and (
+                    start_date is None
+                    or trading_date >= start_date
+                )
+            )
+        ]
 
+        if not included_dates:
+            continue
+
+        core_episode_count += 1
+
+        for trading_date in included_dates:
             grouped[trading_date].append(episode)
 
     days = []
@@ -115,6 +132,7 @@ def build_historical_dataset(
         start_date=start_date,
         end_date=req.observation_date,
         halt_days=tuple(days),
+        core_episode_count=core_episode_count,
     )
 
 
@@ -129,7 +147,6 @@ def _lookback_start(request: AnalysisRequest) -> date | None:
         year -= 1
         month += 12
 
-    # Preserve the day when possible; clamp to the last day of the month.
     import calendar
 
     day = min(
@@ -216,7 +233,6 @@ def _halted_at_close(episode: dict | EpisodeView) -> bool:
             end_time.replace("Z", "+00:00")
         )
 
-    # This remains a provisional dataset flag.
-    # The final Metric 9 implementation will apply the approved
+    # Provisional flag. Metric 9 will apply the approved
     # trading-session close rules explicitly.
     return end_time.hour >= 16

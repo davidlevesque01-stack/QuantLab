@@ -54,6 +54,7 @@ class HistoricalHaltDataset:
     start_date: date | None
     end_date: date | None
     halt_days: tuple[HistoricalHaltDay, ...]
+    core_episode_count: int
 
     @property
     def halt_day_count(self) -> int:
@@ -66,11 +67,7 @@ class HistoricalHaltDataset:
 
 @dataclass(frozen=True)
 class AnalysisResult:
-    """Output contract for one observation.
-
-    Metric calculation is intentionally not implemented in 22.6.2.
-    Values therefore remain None until the metric layer is connected.
-    """
+    """Output contract for one observation."""
 
     ticker: str
     observation_date: date
