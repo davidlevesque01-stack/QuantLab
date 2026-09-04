@@ -55,3 +55,40 @@ def test_results_contract_contains_all_metrics():
 
     assert list(values) == [f"Metric {i}" for i in range(1, 12)]
     assert len(values) == 11
+
+def test_historical_dataset_expands_multiday_episode_into_trading_days():
+    from datetime import datetime
+
+    from analytics.nasdaq_halts.historical_dataset import (
+        build_historical_dataset,
+    )
+
+    request = AnalysisRequest(
+        ticker="TESS",
+        observation_date=date(2020, 3, 16),
+        reason_codes=("LUDP",),
+    )
+
+    episodes = [
+        {
+            "trading_date": date(2020, 3, 12),
+            "halt_start": datetime(2020, 3, 12, 11, 18, 33),
+            "halt_end": datetime(2020, 3, 16, 9, 45, 2),
+        }
+    ]
+
+    dataset = build_historical_dataset(request, episodes)
+
+    assert tuple(
+        day.trading_date
+        for day in dataset.halt_days
+    ) == (
+        date(2020, 3, 12),
+        date(2020, 3, 13),
+        date(2020, 3, 16),
+    )
+
+    assert tuple(
+        day.episode_count
+        for day in dataset.halt_days
+    ) == (1, 1, 1)

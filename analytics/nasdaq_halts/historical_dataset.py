@@ -1,9 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Iterable, Protocol
+
+from shared.calendar.trading_calendar import get_trading_days
 
 from .models import (
     AnalysisRequest,
@@ -41,7 +43,11 @@ def build_historical_dataset(
     request: AnalysisRequest,
     episodes: Iterable[dict | EpisodeView],
 ) -> HistoricalHaltDataset:
-    """Build the reusable Halt-Day dataset from already-qualified episodes.
+    """Build the reusable Halt-Day dataset from qualified CORE episodes.
+
+    Each episode is projected onto every NASDAQ trading session covered
+    by the episode. Weekends and market holidays are excluded through
+    the shared TradingCalendar.
 
     No Metric 1-11 formula is implemented here. This layer only normalizes
     episodes into distinct historical trading days.
@@ -52,29 +58,62 @@ def build_historical_dataset(
     grouped: dict[date, list[dict | EpisodeView]] = defaultdict(list)
 
     for episode in episodes:
-        trading_date = _episode_date(episode)
-        if trading_date > req.observation_date:
+        episode_start, episode_end = _episode_bounds(episode)
+
+        if episode_start is None:
             continue
-        if start_date is not None and trading_date < start_date:
-            continue
-        grouped[trading_date].append(episode)
+
+        first_date = episode_start.date()
+        last_date = (
+            episode_end.date()
+            if episode_end is not None
+            else first_date
+        )
+
+        if last_date < first_date:
+            last_date = first_date
+
+        for trading_date in get_trading_days(first_date, last_date):
+            if trading_date > req.observation_date:
+                continue
+
+            if start_date is not None and trading_date < start_date:
+                continue
+
+            grouped[trading_date].append(episode)
 
     days = []
-    for trading_date in sorted(grouped):
-        rows = grouped[trading_date]
+
+    if grouped:
+        first_dataset_date = min(grouped)
+        trading_dates = get_trading_days(
+            first_dataset_date,
+            req.observation_date,
+        )
+    else:
+        trading_dates = ()
+
+    for trading_date in trading_dates:
+        rows = grouped.get(trading_date)
+
+        if not rows:
+            continue
+
         days.append(
             HistoricalHaltDay(
                 trading_date=trading_date,
                 episode_count=len(rows),
-                halted_at_close=any(_halted_at_close(row) for row in rows),
+                halted_at_close=any(
+                    _halted_at_close(row)
+                    for row in rows
+                ),
             )
         )
 
-    end_date = req.observation_date
     return HistoricalHaltDataset(
         ticker=req.ticker,
         start_date=start_date,
-        end_date=end_date,
+        end_date=req.observation_date,
         halt_days=tuple(days),
     )
 
@@ -85,6 +124,7 @@ def _lookback_start(request: AnalysisRequest) -> date | None:
 
     year = request.observation_date.year
     month = request.observation_date.month - request.lookback_months
+
     while month <= 0:
         year -= 1
         month += 12
@@ -96,7 +136,34 @@ def _lookback_start(request: AnalysisRequest) -> date | None:
         request.observation_date.day,
         calendar.monthrange(year, month)[1],
     )
+
     return date(year, month, day)
+
+
+def _episode_bounds(
+    episode: dict | EpisodeView,
+) -> tuple[datetime | None, datetime | None]:
+    """Return the actual HALT start and end timestamps."""
+
+    if isinstance(episode, EpisodeView):
+        return episode.start_time, episode.end_time
+
+    start = episode.get("halt_start") or episode.get("start_time")
+    end = episode.get("halt_end") or episode.get("end_time")
+
+    start = _to_datetime(start)
+    end = _to_datetime(end)
+
+    if start is None:
+        trading_date = _episode_date(episode)
+
+        if trading_date is not None:
+            start = datetime.combine(
+                trading_date,
+                datetime.min.time(),
+            )
+
+    return start, end
 
 
 def _episode_date(episode: dict | EpisodeView) -> date:
@@ -104,11 +171,32 @@ def _episode_date(episode: dict | EpisodeView) -> date:
         return episode.trading_date
 
     value = episode.get("trading_date") or episode.get("date")
+
     if isinstance(value, datetime):
         return value.date()
+
     if isinstance(value, date):
         return value
+
     return date.fromisoformat(str(value))
+
+
+def _to_datetime(value) -> datetime | None:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    if isinstance(value, date):
+        return datetime.combine(
+            value,
+            datetime.min.time(),
+        )
+
+    return datetime.fromisoformat(
+        str(value).replace("Z", "+00:00")
+    )
 
 
 def _halted_at_close(episode: dict | EpisodeView) -> bool:
@@ -117,14 +205,18 @@ def _halted_at_close(episode: dict | EpisodeView) -> bool:
     else:
         if "halted_at_close" in episode:
             return bool(episode["halted_at_close"])
+
         end_time = episode.get("end_time") or episode.get("halt_end")
 
     if end_time is None:
         return True
 
     if isinstance(end_time, str):
-        end_time = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+        end_time = datetime.fromisoformat(
+            end_time.replace("Z", "+00:00")
+        )
 
-    # This is only a provisional dataset flag. The final Metric 9
-    # implementation will apply the approved ET/session rules explicitly.
+    # This remains a provisional dataset flag.
+    # The final Metric 9 implementation will apply the approved
+    # trading-session close rules explicitly.
     return end_time.hour >= 16

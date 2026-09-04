@@ -104,6 +104,7 @@ def test_metrics_2_to_11_remain_unimplemented():
     for number in range(2, 12):
         assert getattr(result, f"metric_{number}") is None
 
+
 def test_metric_1_multiple_halt_days():
     episodes = [
         {
@@ -156,3 +157,25 @@ def test_metric_1_multiple_halt_days_and_multiple_episodes_same_day():
     )
 
     assert result.metric_1 == 2
+
+
+def test_metric_1_multiday_episode_counts_trading_sessions_only():
+    episodes = [
+        {
+            "trading_date": date(2020, 3, 12),
+            "halt_start": datetime(2020, 3, 12, 11, 18, 33),
+            "halt_end": datetime(2020, 3, 16, 9, 45, 2),
+            "end_time": datetime(2020, 3, 16, 9, 45, 2),
+        },
+    ]
+
+    request = AnalysisRequest(
+        ticker="TESS",
+        observation_date=date(2020, 3, 16),
+        lookback_months=None,
+        reason_codes=("LUDP",),
+    )
+
+    result = AnalysisService().analyze(request, episodes=episodes)
+
+    assert result.metric_1 == 3
