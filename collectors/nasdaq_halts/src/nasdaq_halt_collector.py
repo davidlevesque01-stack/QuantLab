@@ -6,6 +6,10 @@
 import csv
 import json
 
+from collectors.nasdaq_halts.src.nasdaq_paths import (
+    resolve_raw_directory,
+)
+
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -237,11 +241,9 @@ def main():
         ]
     )
 
-    raw_directory = (
-        BASE_DIR
-        / config[
-            "raw_directory"
-        ]
+    raw_directory = resolve_raw_directory(
+        BASE_DIR,
+        config,
     )
 
     processed_directory = (

@@ -1,6 +1,10 @@
 ﻿import argparse
 import json
 import time
+
+from collectors.nasdaq_halts.src.nasdaq_paths import (
+    resolve_raw_directory,
+)
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from pathlib import Path
@@ -34,9 +38,15 @@ config = load_config()
 # RÉPERTOIRES
 # ============================================================
 
+# ============================================================
+# RÉPERTOIRE RAW
+# ============================================================
+
 RAW_DIRECTORY = (
-    PROJECT_ROOT
-    / config["raw_directory"]
+    resolve_raw_directory(
+        PROJECT_ROOT,
+        config,
+    )
     / "historical"
 )
 

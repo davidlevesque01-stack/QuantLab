@@ -7,10 +7,10 @@ from shared.database import get_connection
 
 # ============================================================
 # QuantLab - Nasdaq PostgreSQL Persistence
-# VERSION 1.0
+# VERSION 1.1
 # ============================================================
 
-VERSION = "1.0"
+VERSION = "1.2"
 
 ALLOWED_HALT_CLOSE_STATUS = {
     "YES",
@@ -207,12 +207,14 @@ def get_raw_natural_key(event):
 
         raw.nasdaq_trade_halt
 
-    Clé :
+    Clé V1.1 :
         symbol
         halt_date
         halt_time
         reason_code
         market
+        resumption_date
+        resumption_trade_time
     """
 
     halt_start = event.get(
@@ -256,14 +258,23 @@ def get_raw_natural_key(event):
             f"RAW event has no reason_code: {symbol}"
         )
 
+    resumption_date = parse_date(
+        event.get("resumption_date")
+    )
+
+    resumption_trade_time = parse_time(
+        event.get("resumption_trade_time")
+    )
+
     return (
         symbol,
         halt_start.date(),
         halt_start.time(),
         reason_code,
         market,
+        resumption_date,
+        resumption_trade_time,
     )
-
 
 # ============================================================
 # CORRESPONDANCE EPISODE -> RAW
@@ -394,33 +405,48 @@ def normalize_market(market):
 def _build_episode_event_groups(unique_events):
     """
     Reconstruit les groupes RAW exactement selon la logique de
-    build_halt_episodes().
+    build_halt_episodes() V1.2.
 
-    Important :
-    - le regroupement demeure effectué par symbole;
-    - les alias de marché ne créent pas un nouvel épisode;
-    - un événement appartient à un seul groupe;
-    - la liste retournée conserve l'ordre de construction des épisodes.
+    Identité CORE :
+        symbol + market normalisé + période HALT continue.
+
+    Le reason_code ne sépare jamais les épisodes.
+
+    Un HALT ouvert reste ouvert jusqu'à l'observation d'une
+    halt_end valide. NULL et les fins antérieures au halt_start
+    ne ferment donc jamais l'épisode.
     """
 
     from collections import defaultdict
 
-    events_by_symbol = defaultdict(list)
+    events_by_group = defaultdict(list)
 
     for event in unique_events:
 
-        if event.get("halt_start") is not None:
+        if event.get("halt_start") is None:
+            continue
 
-            events_by_symbol[
-                event["symbol"]
-            ].append(event)
+        key = (
+            event["symbol"],
+            normalize_market(event.get("market")),
+        )
+
+        events_by_group[key].append(event)
 
     groups = []
 
-    for symbol, events in events_by_symbol.items():
+    for _, events in events_by_group.items():
 
         events.sort(
-            key=lambda x: x["halt_start"]
+            key=lambda x: (
+                x["halt_start"],
+                x.get("halt_end")
+                if (
+                    x.get("halt_end") is not None
+                    and x.get("halt_end") >= x["halt_start"]
+                )
+                else x["halt_start"],
+            )
         )
 
         current_events = []
@@ -430,27 +456,27 @@ def _build_episode_event_groups(unique_events):
         for event in events:
 
             start = event["halt_start"]
-            end = event["halt_end"]
+            raw_end = event.get("halt_end")
+
+            end = (
+                raw_end
+                if (
+                    raw_end is not None
+                    and raw_end >= start
+                )
+                else None
+            )
 
             if not current_events:
-
                 current_events = [event]
                 current_start = start
                 current_end = end
                 continue
 
-            same_episode = False
-
-            if start == current_start:
-
+            if current_end is None:
                 same_episode = True
-
-            elif (
-                current_end is not None
-                and start <= current_end
-            ):
-
-                same_episode = True
+            else:
+                same_episode = start <= current_end
 
             if same_episode:
 
@@ -459,13 +485,11 @@ def _build_episode_event_groups(unique_events):
                 if start < current_start:
                     current_start = start
 
-                if end is not None:
-
-                    if (
-                        current_end is None
-                        or end > current_end
-                    ):
-                        current_end = end
+                if end is not None and (
+                    current_end is None
+                    or end > current_end
+                ):
+                    current_end = end
 
             else:
 
@@ -823,8 +847,8 @@ def write_trade_halts(
         for natural_key, _ in prepared_events
     ]
 
-    # 5 colonnes de natural key.
-    # 5 000 × 5 = 25 000 paramètres.
+    # 7 colonnes de natural key.
+    # 5 000 × 7 = 35 000 paramètres.
     LOOKUP_BATCH_SIZE = 5000
 
     with conn.cursor() as cur:
@@ -841,7 +865,7 @@ def write_trade_halts(
             ]
 
             placeholders = ", ".join(
-                ["(%s, %s, %s, %s, %s)"]
+                ["(%s, %s, %s, %s, %s, %s, %s)"]
                 * len(batch_keys)
             )
 
@@ -873,7 +897,9 @@ def write_trade_halts(
                     halt_date,
                     halt_time,
                     reason_code,
-                    market
+                    market,
+                    resumption_date,
+                    resumption_trade_time
                 ) IN ({placeholders});
                 """,
                 lookup_params
@@ -902,6 +928,8 @@ def write_trade_halts(
                     halt_time,
                     reason_code,
                     market,
+                    resumption_date,
+                    resumption_trade_time,
                 )
 
                 existing_by_key[
@@ -1148,7 +1176,9 @@ def write_trade_halts(
                     halt_date,
                     halt_time,
                     reason_code,
-                    market;
+                    market,
+                    resumption_date,
+                    resumption_trade_time;
                 """,
                 insert_params
             )
@@ -1166,6 +1196,8 @@ def write_trade_halts(
                 halt_time,
                 reason_code,
                 market,
+                resumption_date,
+                resumption_trade_time,
             ) = row
 
             natural_key = (
@@ -1174,6 +1206,8 @@ def write_trade_halts(
                 halt_time,
                 reason_code,
                 market,
+                resumption_date,
+                resumption_trade_time,
             )
 
             returned_by_key[
@@ -1343,49 +1377,33 @@ def write_halt_episodes(
     raw_ids
 ):
     """
-    Écrit les HALT Episodes dans :
+    Persiste les épisodes CORE et leurs relations CORE -> RAW.
 
-        core.nasdaq_halt_episode
+    V1.1 PERFORMANCE :
+    - préparation CORE/RAW identique à V1.0;
+    - staging PostgreSQL temporaire;
+    - INSERT CORE en une opération SQL;
+    - UPDATE CORE en une opération SQL;
+    - INSERT/DELETE des relations CORE -> RAW en opérations SQL
+      massives;
+    - aucun SELECT/UPDATE/INSERT individuel par épisode.
 
-    Modèle V1.0 :
-
+    Modèle :
         1 CORE episode -> N RAW events
 
-    La table :
+    Clé naturelle CORE V1.2 :
+        symbol
+        market
+        halt_start
 
-        core.nasdaq_halt_episode_event
-
-    conserve toutes les relations CORE -> RAW.
-
-    Règles :
-    - les épisodes sont reconstruits selon la logique validée de
-      build_halt_episodes();
-    - les alias Q/N/A et leurs noms complets sont normalisés pour
-      déterminer le marché CORE;
-    - plusieurs marchés normalisés => market = NULL;
-    - plusieurs reason_code => reason_code = NULL;
-    - un épisode peut référencer plusieurs RAW events;
-    - trade_halt_id conserve un RAW représentatif pour compatibilité
-      avec le schéma CORE historique;
-    - une même RAW event ne peut appartenir qu'à un seul CORE;
-    - les écritures sont idempotentes;
-    - les valeurs NULL entrantes n'effacent pas une valeur connue.
+    reason_code est descriptif et ne fait pas partie de la clé.
     """
 
-    inserted = 0
-    updated = 0
-    unchanged = 0
-
     if not episodes:
-
-        return (
-            inserted,
-            updated,
-            unchanged,
-        )
+        return (0, 0, 0)
 
     # ========================================================
-    # 1. PRÉPARATION DES GROUPES CORE -> RAW
+    # 1. PRÉPARATION ET VALIDATION EN MÉMOIRE
     # ========================================================
 
     prepared_groups = _prepare_episode_raw_groups(
@@ -1399,79 +1417,76 @@ def write_halt_episodes(
     for group in prepared_groups:
 
         episode = group["episode"]
-
-        halt_start = episode.get(
-            "halt_start"
-        )
+        halt_start = episode.get("halt_start")
 
         if halt_start is None:
-
             raise ValueError(
                 "CORE episode has no halt_start: "
                 f"{episode}"
             )
 
-        params = {
-            # Legacy representative RAW id retained because the
-            # existing CORE schema still requires trade_halt_id
-            # and enforces UNIQUE(trade_halt_id). The complete
-            # 1-to-N relationship is stored in
-            # core.nasdaq_halt_episode_event.
-            "trade_halt_id":
-                raw_ids_for_episode[0],
+        episode_raw_ids = list(group["raw_ids"])
 
-            "collector_episode_id":
-                empty_to_none(
-                    episode.get(
-                        "episode_id"
-                    )
-                ),
+        if not episode_raw_ids:
+            raise RuntimeError(
+                "CORE episode has no RAW ids: "
+                f"{episode.get('episode_id')}"
+            )
 
-            "symbol":
-                episode["symbol"],
+        # ----------------------------------------------------
+        # V1.1 DATA QUALITY GUARD
+        #
+        # Certains snapshots historiques Nasdaq contiennent un
+        # resumption_time antérieur au halt_start. Le RAW doit
+        # rester fidèle à la source, mais un épisode CORE ne peut
+        # pas violer chk_nasdaq_halt_end.
+        #
+        # Dans ce cas :
+        #   - halt_end = NULL
+        #   - duration_minutes = NULL
+        #   - le RAW et la relation CORE -> RAW sont conservés
+        #   - halt_at_close est conservé comme calculé par le
+        #     moteur d'épisodes.
+        #
+        # Exemple historique connu :
+        #   TPC / 2023-05-01 / 12:54:10 -> 12:53:43
+        # ----------------------------------------------------
 
-            "issue_name":
-                group["issue_name"],
+        halt_end = episode.get("halt_end")
 
-            "market":
-                group["market"],
-
-            "reason_code":
-                group["reason_code"],
-
-            "halt_start":
-                halt_start,
-
-            "halt_end":
-                episode.get(
-                    "halt_end"
-                ),
-
-            "duration_minutes":
-                parse_decimal(
-                    episode.get(
-                        "duration_minutes"
-                    )
-                ),
-
-            "halt_close_status":
-                parse_halt_close_status(
-                    episode.get(
-                        "halt_at_close"
-                    )
-                ),
-
-            "raw_ids":
-                group["raw_ids"],
-        }
+        if (
+            halt_end is not None
+            and halt_end < halt_start
+        ):
+            halt_end = None
+            duration_minutes = None
+        else:
+            duration_minutes = parse_decimal(
+                episode.get("duration_minutes")
+            )
 
         prepared_episodes.append(
-            params
+            {
+                "trade_halt_id": episode_raw_ids[0],
+                "collector_episode_id":
+                    empty_to_none(
+                        episode.get("episode_id")
+                    ),
+                "symbol": episode["symbol"],
+                "issue_name": group["issue_name"],
+                "market": group["market"],
+                "reason_code": group["reason_code"],
+                "halt_start": halt_start,
+                "halt_end": halt_end,
+                "duration_minutes":
+                    duration_minutes,
+                "halt_close_status":
+                    parse_halt_close_status(
+                        episode.get("halt_at_close")
+                    ),
+                "raw_ids": episode_raw_ids,
+            }
         )
-
-    # ========================================================
-    # 2. VALIDATION RAW -> CORE
-    # ========================================================
 
     seen_raw_ids = set()
 
@@ -1480,477 +1495,399 @@ def write_halt_episodes(
         for trade_halt_id in params["raw_ids"]:
 
             if trade_halt_id in seen_raw_ids:
-
                 raise RuntimeError(
                     "RAW event assigned to multiple CORE "
                     f"episodes: {trade_halt_id}"
                 )
 
-            seen_raw_ids.add(
-                trade_halt_id
-            )
+            seen_raw_ids.add(trade_halt_id)
 
     # ========================================================
-    # 3. LOOKUP CORE PAR HALT_START + SYMBOL
+    # 2. TEMPORARY STAGING
     #
-    # trade_halt_id n'est plus la clé unique d'un épisode.
+    # Les types sont dérivés directement du schéma PostgreSQL
+    # afin de ne pas supposer int/bigint/timestamp précis.
     # ========================================================
-
-    existing_by_key = {}
 
     with conn.cursor() as cur:
 
-        for params in prepared_episodes:
+        cur.execute(
+            """
+            CREATE TEMP TABLE _quantlab_core_episode_stage
+            ON COMMIT DROP
+            AS
+            SELECT
+                trade_halt_id,
+                collector_episode_id,
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_start,
+                halt_end,
+                duration_minutes,
+                halt_close_status
+            FROM core.nasdaq_halt_episode
+            WHERE FALSE;
+            """
+        )
 
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    collector_episode_id,
-                    symbol,
-                    issue_name,
-                    market,
-                    reason_code,
-                    halt_start,
-                    halt_end,
-                    duration_minutes,
-                    halt_close_status
-                FROM core.nasdaq_halt_episode
-                WHERE symbol = %s
-                  AND halt_start = %s;
-                """,
+        cur.execute(
+            """
+            CREATE TEMP TABLE _quantlab_core_relation_stage
+            ON COMMIT DROP
+            AS
+            SELECT
+                ep.symbol,
+                ep.market,
+                ep.halt_start,
+                rel.trade_halt_id
+            FROM core.nasdaq_halt_episode ep
+            JOIN core.nasdaq_halt_episode_event rel
+              ON rel.episode_id = ep.id
+            WHERE FALSE;
+            """
+        )
+
+        # executemany() est utilisé uniquement pour charger les tables
+        # temporaires. Les opérations CORE réelles restent massives.
+        cur.executemany(
+            """
+            INSERT INTO _quantlab_core_episode_stage (
+                trade_halt_id,
+                collector_episode_id,
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_start,
+                halt_end,
+                duration_minutes,
+                halt_close_status
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            );
+            """,
+            [
                 (
-                    params["symbol"],
-                    params["halt_start"],
+                    p["trade_halt_id"],
+                    p["collector_episode_id"],
+                    p["symbol"],
+                    p["issue_name"],
+                    p["market"],
+                    p["reason_code"],
+                    p["halt_start"],
+                    p["halt_end"],
+                    p["duration_minutes"],
+                    p["halt_close_status"],
                 )
-            )
+                for p in prepared_episodes
+            ],
+        )
 
-            rows = cur.fetchall()
+        relation_rows = []
 
-            if len(rows) > 1:
+        for p in prepared_episodes:
 
-                raise RuntimeError(
-                    "Multiple CORE episodes found for "
-                    f"{params['symbol']} at "
-                    f"{params['halt_start']}."
-                )
+            for trade_halt_id in p["raw_ids"]:
 
-            if rows:
-
-                row = rows[0]
-
-                existing_by_key[
+                relation_rows.append(
                     (
-                        params["symbol"],
-                        params["halt_start"],
-                    )
-                ] = {
-                    "id": row[0],
-                    "collector_episode_id": row[1],
-                    "symbol": row[2],
-                    "issue_name": row[3],
-                    "market": row[4],
-                    "reason_code": row[5],
-                    "halt_start": row[6],
-                    "halt_end": row[7],
-                    "duration_minutes": row[8],
-                    "halt_close_status": row[9],
-                }
-
-    # ========================================================
-    # 4. CLASSIFICATION
-    # ========================================================
-
-    insert_rows = []
-    update_rows = []
-
-    for params in prepared_episodes:
-
-        key = (
-            params["symbol"],
-            params["halt_start"],
-        )
-
-        existing = existing_by_key.get(
-            key
-        )
-
-        if existing is None:
-
-            insert_rows.append(
-                params
-            )
-
-            continue
-
-        episode_id = existing["id"]
-
-        if (
-            existing["symbol"]
-            != params["symbol"]
-        ):
-
-            raise RuntimeError(
-                "CORE symbol mismatch for "
-                f"episode id {episode_id}"
-            )
-
-        if (
-            existing["halt_start"]
-            != params["halt_start"]
-        ):
-
-            raise RuntimeError(
-                "CORE halt_start mismatch for "
-                f"episode id {episode_id}"
-            )
-
-        desired_issue_name = (
-            prefer_new_value(
-                existing["issue_name"],
-                params["issue_name"]
-            )
-        )
-
-        desired_market = (
-            prefer_new_value(
-                existing["market"],
-                params["market"]
-            )
-        )
-
-        desired_reason_code = (
-            prefer_new_value(
-                existing["reason_code"],
-                params["reason_code"]
-            )
-        )
-
-        desired_halt_end = (
-            prefer_new_value(
-                existing["halt_end"],
-                params["halt_end"]
-            )
-        )
-
-        desired_duration_minutes = (
-            prefer_new_value(
-                existing["duration_minutes"],
-                params["duration_minutes"]
-            )
-        )
-
-        desired_halt_close_status = (
-            prefer_close_status(
-                existing["halt_close_status"],
-                params["halt_close_status"]
-            )
-        )
-
-        has_changes = any(
-            (
-                desired_issue_name
-                != existing["issue_name"],
-
-                desired_market
-                != existing["market"],
-
-                desired_reason_code
-                != existing["reason_code"],
-
-                desired_halt_end
-                != existing["halt_end"],
-
-                desired_duration_minutes
-                != existing["duration_minutes"],
-
-                desired_halt_close_status
-                != existing["halt_close_status"],
-            )
-        )
-
-        if has_changes:
-
-            update_rows.append(
-                {
-                    "id": episode_id,
-                    "issue_name": desired_issue_name,
-                    "market": desired_market,
-                    "reason_code": desired_reason_code,
-                    "halt_end": desired_halt_end,
-                    "duration_minutes":
-                        desired_duration_minutes,
-                    "halt_close_status":
-                        desired_halt_close_status,
-                    "raw_ids":
-                        params["raw_ids"],
-                }
-            )
-
-        else:
-
-            update_rows.append(
-                {
-                    "id": episode_id,
-                    "issue_name":
-                        existing["issue_name"],
-                    "market":
-                        existing["market"],
-                    "reason_code":
-                        existing["reason_code"],
-                    "halt_end":
-                        existing["halt_end"],
-                    "duration_minutes":
-                        existing["duration_minutes"],
-                    "halt_close_status":
-                        existing["halt_close_status"],
-                    "raw_ids":
-                        params["raw_ids"],
-                }
-            )
-
-            unchanged += 1
-
-    # ========================================================
-    # 5. INSERT CORE + RELATIONS
-    # ========================================================
-
-    for params in insert_rows:
-
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                INSERT INTO core.nasdaq_halt_episode (
-                    trade_halt_id,
-                    collector_episode_id,
-                    symbol,
-                    issue_name,
-                    market,
-                    reason_code,
-                    halt_start,
-                    halt_end,
-                    duration_minutes,
-                    halt_close_status
-                )
-                VALUES (
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
-                )
-                RETURNING id;
-                """,
-                (
-                    params["trade_halt_id"],
-                    params["collector_episode_id"],
-                    params["symbol"],
-                    params["issue_name"],
-                    params["market"],
-                    params["reason_code"],
-                    params["halt_start"],
-                    params["halt_end"],
-                    params["duration_minutes"],
-                    params["halt_close_status"],
-                )
-            )
-
-            episode_id = cur.fetchone()[0]
-
-            for trade_halt_id in params["raw_ids"]:
-
-                cur.execute(
-                    """
-                    INSERT INTO core.nasdaq_halt_episode_event (
-                        episode_id,
-                        trade_halt_id
-                    )
-                    VALUES (%s, %s)
-                    ON CONFLICT (
-                        episode_id,
-                        trade_halt_id
-                    )
-                    DO NOTHING;
-                    """,
-                    (
-                        episode_id,
+                        p["symbol"],
+                        p["market"],
+                        p["halt_start"],
                         trade_halt_id,
                     )
                 )
 
-        inserted += 1
-
-    # ========================================================
-    # 6. UPDATE CORE + RECONSTRUCTION DES RELATIONS
-    # ========================================================
-
-    for row in update_rows:
-
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                UPDATE core.nasdaq_halt_episode
-                SET
-                    issue_name = %s,
-                    market = %s,
-                    reason_code = %s,
-                    halt_end = %s,
-                    duration_minutes = %s,
-                    halt_close_status = %s
-                WHERE id = %s
-                RETURNING id;
-                """,
-                (
-                    row["issue_name"],
-                    row["market"],
-                    row["reason_code"],
-                    row["halt_end"],
-                    row["duration_minutes"],
-                    row["halt_close_status"],
-                    row["id"],
-                )
+        cur.executemany(
+            """
+            INSERT INTO _quantlab_core_relation_stage (
+                symbol,
+                market,
+                halt_start,
+                trade_halt_id
             )
-
-            returned_id = cur.fetchone()
-
-            if returned_id is None:
-
-                raise RuntimeError(
-                    "CORE UPDATE did not return episode id "
-                    f"{row['id']}"
-                )
-
-            cur.execute(
-                """
-                SELECT
-                    trade_halt_id
-                FROM core.nasdaq_halt_episode_event
-                WHERE episode_id = %s;
-                """,
-                (row["id"],)
-            )
-
-            existing_raw_ids = {
-                result[0]
-                for result in cur.fetchall()
-            }
-
-            desired_raw_ids = set(
-                row["raw_ids"]
-            )
-
-            extra_raw_ids = (
-                existing_raw_ids
-                - desired_raw_ids
-            )
-
-            missing_raw_ids = (
-                desired_raw_ids
-                - existing_raw_ids
-            )
-
-            for trade_halt_id in extra_raw_ids:
-
-                cur.execute(
-                    """
-                    DELETE FROM core.nasdaq_halt_episode_event
-                    WHERE episode_id = %s
-                      AND trade_halt_id = %s;
-                    """,
-                    (
-                        row["id"],
-                        trade_halt_id,
-                    )
-                )
-
-            for trade_halt_id in missing_raw_ids:
-
-                cur.execute(
-                    """
-                    INSERT INTO core.nasdaq_halt_episode_event (
-                        episode_id,
-                        trade_halt_id
-                    )
-                    VALUES (%s, %s)
-                    ON CONFLICT (
-                        episode_id,
-                        trade_halt_id
-                    )
-                    DO NOTHING;
-                    """,
-                    (
-                        row["id"],
-                        trade_halt_id,
-                    )
-                )
-
-    # ========================================================
-    # 7. VALIDATION FINALE
-    # ========================================================
-
-    expected_count = len(
-        prepared_episodes
-    )
-
-    if (
-        inserted
-        + updated
-        + unchanged
-        != expected_count
-    ):
-
-        raise RuntimeError(
-            "CORE persistence count mismatch: "
-            f"inserted={inserted}, "
-            f"updated={updated}, "
-            f"unchanged={unchanged}, "
-            f"expected={expected_count}"
+            VALUES (%s, %s, %s, %s);
+            """,
+            relation_rows,
         )
 
-    # Chaque RAW de cette exécution doit être reliée
-    # exactement à un CORE.
-    expected_raw_ids = set(
-        seen_raw_ids
-    )
+        # ====================================================
+        # 3. INTÉGRITÉ DE LA CLÉ CORE
+        # ====================================================
 
-    if expected_raw_ids:
+        cur.execute(
+            """
+            SELECT
+                s.symbol,
+                s.market,
+                s.reason_code,
+                s.halt_start,
+                COUNT(ep.id)
+            FROM _quantlab_core_episode_stage s
+            JOIN core.nasdaq_halt_episode ep
+              ON ep.symbol = s.symbol
+             AND ep.market = s.market
+             AND ep.halt_start = s.halt_start
+            GROUP BY
+                s.symbol,
+                s.market,
+                s.reason_code,
+                s.halt_start
+            HAVING COUNT(ep.id) > 1;
+            """
+        )
 
-        with conn.cursor() as cur:
+        duplicate_existing = cur.fetchall()
 
-            placeholders = ", ".join(
-                ["%s"] * len(expected_raw_ids)
-            )
-
-            cur.execute(
-                f"""
-                SELECT
-                    trade_halt_id,
-                    COUNT(DISTINCT episode_id)
-                FROM core.nasdaq_halt_episode_event
-                WHERE trade_halt_id IN (
-                    {placeholders}
-                )
-                GROUP BY trade_halt_id;
-                """,
-                list(expected_raw_ids)
-            )
-
-            relation_counts = {
-                row[0]: row[1]
-                for row in cur.fetchall()
-            }
-
-        missing = [
-            raw_id
-            for raw_id in expected_raw_ids
-            if relation_counts.get(raw_id, 0) != 1
-        ]
-
-        if missing:
+        if duplicate_existing:
 
             raise RuntimeError(
-                "CORE -> RAW relationship validation failed. "
-                "RAW ids without exactly one CORE relation: "
-                f"{missing[:20]}"
+                "Multiple CORE episodes found for the same "
+                "(symbol, market, halt_start): "
+                f"{duplicate_existing[:20]}"
+            )
+
+        # ====================================================
+        # 4. INSERT CORE MASSIF
+        # ====================================================
+
+        cur.execute(
+            """
+            INSERT INTO core.nasdaq_halt_episode (
+                trade_halt_id,
+                collector_episode_id,
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_start,
+                halt_end,
+                duration_minutes,
+                halt_close_status
+            )
+            SELECT
+                s.trade_halt_id,
+                s.collector_episode_id,
+                s.symbol,
+                s.issue_name,
+                s.market,
+                s.reason_code,
+                s.halt_start,
+                s.halt_end,
+                s.duration_minutes,
+                s.halt_close_status
+            FROM _quantlab_core_episode_stage s
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM core.nasdaq_halt_episode ep
+                WHERE ep.symbol = s.symbol
+                  AND ep.market = s.market
+                  AND ep.halt_start = s.halt_start
+            );
+            """
+        )
+
+        inserted = cur.rowcount
+
+        # ====================================================
+        # 5. UPDATE CORE MASSIF
+        #
+        # prefer_new_value :
+        #     incoming NULL -> existing
+        #     incoming value -> incoming
+        #
+        # prefer_close_status :
+        #     incoming NULL -> existing
+        #     incoming UNKNOWN + existing final -> existing
+        #     sinon incoming
+        # ====================================================
+
+        cur.execute(
+            """
+            WITH desired AS (
+                SELECT
+                    ep.id,
+                    CASE
+                        WHEN s.issue_name IS NULL
+                            THEN ep.issue_name
+                        ELSE s.issue_name
+                    END AS issue_name_new,
+                    CASE
+                        WHEN s.market IS NULL
+                            THEN ep.market
+                        ELSE s.market
+                    END AS market_new,
+                    CASE
+                        WHEN s.reason_code IS NULL
+                            THEN ep.reason_code
+                        ELSE s.reason_code
+                    END AS reason_code_new,
+                    CASE
+                        WHEN s.halt_end IS NULL
+                            THEN ep.halt_end
+                        ELSE s.halt_end
+                    END AS halt_end_new,
+                    CASE
+                        WHEN s.duration_minutes IS NULL
+                            THEN ep.duration_minutes
+                        ELSE s.duration_minutes
+                    END AS duration_minutes_new,
+                    CASE
+                        WHEN s.halt_close_status IS NULL
+                            THEN ep.halt_close_status
+                        WHEN s.halt_close_status = 'UNKNOWN'
+                             AND ep.halt_close_status IN (
+                                 'YES',
+                                 'NO',
+                                 'MULTI_DAY'
+                             )
+                            THEN ep.halt_close_status
+                        ELSE s.halt_close_status
+                    END AS halt_close_status_new
+                FROM core.nasdaq_halt_episode ep
+                JOIN _quantlab_core_episode_stage s
+                  ON s.symbol = ep.symbol
+                 AND s.market = ep.market
+                 AND s.reason_code = ep.reason_code
+                 AND s.halt_start = ep.halt_start
+            )
+            UPDATE core.nasdaq_halt_episode ep
+            SET
+                issue_name = d.issue_name_new,
+                market = d.market_new,
+                reason_code = d.reason_code_new,
+                halt_end = d.halt_end_new,
+                duration_minutes = d.duration_minutes_new,
+                halt_close_status = d.halt_close_status_new
+            FROM desired d
+            WHERE ep.id = d.id
+              AND (
+                  ep.issue_name IS DISTINCT FROM d.issue_name_new
+                  OR ep.market IS DISTINCT FROM d.market_new
+                  OR ep.reason_code IS DISTINCT FROM d.reason_code_new
+                  OR ep.halt_end IS DISTINCT FROM d.halt_end_new
+                  OR ep.duration_minutes
+                      IS DISTINCT FROM d.duration_minutes_new
+                  OR ep.halt_close_status
+                      IS DISTINCT FROM d.halt_close_status_new
+              );
+            """
+        )
+
+        updated = cur.rowcount
+
+        expected = len(prepared_episodes)
+
+        unchanged = expected - inserted - updated
+
+        if unchanged < 0:
+            raise RuntimeError(
+                "CORE persistence count mismatch: "
+                f"inserted={inserted}, "
+                f"updated={updated}, "
+                f"expected={expected}"
+            )
+
+        # ====================================================
+        # 6. SUPPRESSION DES RELATIONS OBSOLÈTES
+        #
+        # Seulement pour les épisodes présents dans le staging.
+        # ====================================================
+
+        cur.execute(
+            """
+            DELETE FROM core.nasdaq_halt_episode_event rel
+            USING core.nasdaq_halt_episode ep
+            JOIN _quantlab_core_episode_stage s
+              ON s.symbol = ep.symbol
+             AND s.market = ep.market
+             AND s.reason_code = ep.reason_code
+             AND s.halt_start = ep.halt_start
+            WHERE rel.episode_id = ep.id
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM _quantlab_core_relation_stage desired
+                  WHERE desired.symbol = ep.symbol
+                    AND desired.market = ep.market
+                    AND desired.halt_start = ep.halt_start
+                    AND desired.trade_halt_id = rel.trade_halt_id
+              );
+            """
+        )
+
+        # ====================================================
+        # 7. INSERT DES RELATIONS MANQUANTES EN MASSE
+        # ====================================================
+
+        cur.execute(
+            """
+            INSERT INTO core.nasdaq_halt_episode_event (
+                episode_id,
+                trade_halt_id
+            )
+            SELECT
+                ep.id,
+                desired.trade_halt_id
+            FROM _quantlab_core_relation_stage desired
+            JOIN core.nasdaq_halt_episode ep
+              ON ep.symbol = desired.symbol
+             AND ep.market = desired.market
+             AND ep.halt_start = desired.halt_start
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM core.nasdaq_halt_episode_event rel
+                WHERE rel.episode_id = ep.id
+                  AND rel.trade_halt_id = desired.trade_halt_id
+            );
+            """
+        )
+
+        # ====================================================
+        # 8. VALIDATION RELATIONNELLE
+        #
+        # V1.2 :
+        # reason_code ne fait pas partie de l'identité CORE.
+        # Une relation est identifiée par :
+        #
+        #     symbol + market + halt_start + trade_halt_id
+        #
+        # ====================================================
+
+        expected_raw_count = len(seen_raw_ids)
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT
+                    desired.symbol,
+                    desired.market,
+                    desired.halt_start,
+                    desired.trade_halt_id
+                FROM _quantlab_core_relation_stage desired
+            ) expected
+            JOIN core.nasdaq_halt_episode ep
+              ON ep.symbol = expected.symbol
+             AND ep.market = expected.market
+             AND ep.halt_start = expected.halt_start
+            JOIN core.nasdaq_halt_episode_event rel
+              ON rel.episode_id = ep.id
+             AND rel.trade_halt_id = expected.trade_halt_id;
+            """
+        )
+
+        observed_relationships = cur.fetchone()[0]
+
+        if observed_relationships != expected_raw_count:
+
+            raise RuntimeError(
+                "CORE -> RAW relationship validation failed: "
+                f"expected={expected_raw_count}, "
+                f"observed={observed_relationships}"
             )
 
     return (
@@ -1958,112 +1895,3 @@ def write_halt_episodes(
         updated,
         unchanged,
     )
-
-
-# ============================================================
-# PERSISTANCE COMPLÈTE
-# ============================================================
-
-def persist_nasdaq_halts(
-    unique_events,
-    episodes
-):
-    """
-    Persiste une exécution Nasdaq complète dans PostgreSQL.
-
-    La connexion est gérée dans une transaction unique :
-
-        RAW
-        puis
-        CORE
-        puis
-        CORE -> RAW relationships
-
-    Toute erreur provoque le rollback de l'ensemble de
-    l'opération.
-    """
-
-    print()
-    print(
-        "============================================================"
-    )
-    print(
-        f"POSTGRESQL PERSISTENCE V1.0"
-    )
-    print(
-        "============================================================"
-    )
-    print()
-
-    with get_connection() as conn:
-
-        (
-            raw_inserted,
-            raw_updated,
-            raw_unchanged,
-            raw_ids,
-        ) = write_trade_halts(
-            conn,
-            unique_events
-        )
-
-        (
-            core_inserted,
-            core_updated,
-            core_unchanged,
-        ) = write_halt_episodes(
-            conn,
-            episodes,
-            unique_events,
-            raw_ids
-        )
-
-    print(
-        f"RAW inserted          : {raw_inserted}"
-    )
-
-    print(
-        f"RAW updated           : {raw_updated}"
-    )
-
-    print(
-        f"RAW unchanged         : {raw_unchanged}"
-    )
-
-    print(
-        f"CORE inserted         : {core_inserted}"
-    )
-
-    print(
-        f"CORE updated          : {core_updated}"
-    )
-
-    print(
-        f"CORE unchanged        : {core_unchanged}"
-    )
-
-    print()
-
-    print(
-        "PostgreSQL persistence completed"
-    )
-
-    return {
-        "raw_inserted":
-            raw_inserted,
-
-        "raw_updated":
-            raw_updated,
-
-        "raw_unchanged":
-            raw_unchanged,
-
-        "core_inserted":
-            core_inserted,
-
-        "core_updated":
-            core_updated,
-
-        "core_unchanged":
-            core_unchanged,
-    }

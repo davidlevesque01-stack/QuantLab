@@ -1,270 +1,247 @@
-# QuantLab — Nasdaq Halt Collector
+﻿# QuantLab â€“ Nasdaq HALT Metrics Specification
 
-## METRICS_SPECIFICATION.md
+**Version:** V0.8
+**Status:** Analytical reference specification
 
-**Version : V0.7**  
-**Statut : Référence officielle des métriques HALT**  
-**Dernière mise à jour : 2026-09-04**
+## 1. Scope
 
----
+This document defines the official calculation rules for the 11 Nasdaq HALT metrics used by the QuantLab HALT application.
 
-## 1. Objectif
+Metrics 1â€“9 are **Historical / Predictive Features**.
+Metrics 10â€“11 are **Observation-Day Features**.
 
-Ce document définit les structures de données et les métriques officielles utilisées par QuantLab pour les Nasdaq Trading Halts.
+## 2. Observation Context
 
-La V0.7 met à jour la représentation du statut de clôture afin de l’aligner avec le modèle CORE V1.1.
+Each calculation is associated with:
+- Ticker
+- Observation Date `T`
+- Lookback Period `X` months
+- HALT reason-code selection
 
-Les définitions métier des métriques existantes sont conservées.
+### 2.1 Observation Date
 
----
+If supplied:
 
-## 2. Architecture des données
+`T = supplied date`
 
-```text
-Nasdaq XML
-    ↓
-tradehalts.csv
-    ↓
-halt_episodes.csv
-    ↓
-ticker_halt_daily.csv
-    ↓
-ticker_halt_metrics.csv
-    ↓
-ticker_halt_reason_metrics.csv
-```
+Otherwise:
 
-Les XML sont conservés comme source de provenance et permettent le recalcul complet des datasets dérivés.
+`T = today`
 
-Le pipeline PostgreSQL suit parallèlement :
+### 2.2 Lookback Period
 
-```text
-Nasdaq XML
-    ↓
-RAW
-    ↓
-CORE episodes
-    ↓
-analytics future
-```
+Default:
 
-Les CSV restent des sorties dérivées de validation, diagnostic et export.
+`X = 36 months`
 
----
+`X` is configurable in months.
 
-## 3. Niveaux de données
+If Period is empty, the historical window begins at the oldest available database date before `T`.
 
-### Niveau 1 — `tradehalts.csv`
+### 2.3 Historical Window
 
-Événements Nasdaq dédupliqués.
+Metrics 1â€“9 use:
 
-Champs principaux :
+`T-X months â†’ before T`
 
-- symbol
-- issue_name
-- market
-- reason_code
-- halt_date
-- halt_time
-- resumption_date
-- resumption_quote_time
-- resumption_trade_time
-- pause_threshold_price
+The observation day `T` is excluded from Metrics 1â€“9.
 
-### Niveau 2 — `halt_episodes.csv`
+### 2.4 Observation-Day Window
 
-Un épisode représente une période continue de HALT.
+Metrics 10â€“11 use observation day `T`.
 
-Champs :
+## 3. HALT Episode Basis
 
-- episode_id
-- symbol
-- issue_name
-- market
-- reason_code
-- halt_start
-- halt_end
-- duration_minutes
-- halt_close_status
+All episode-based metrics use the QuantLab CORE HALT episode model.
 
-`halt_at_close` n’est plus le champ de référence.
+### 3.1 One Continuous HALT = One Episode
 
-### Niveau 3 — `ticker_halt_daily.csv`
+A ticker remains in the same episode from `halt_start` until a valid HALT end is established.
 
-Une ligne = un ticker + une journée de marché comportant au moins un HALT.
+Episode identity does not depend on reason code.
 
-Champs :
+Multiple RAW events, reason codes, duplicate starts, overlapping records, or a NULL end combined with a valid end may therefore represent one CORE episode.
 
-- symbol
-- date
-- halt_present
-- episode_count
-- halt_close_status
+### 3.2 Multiple Reason Codes
 
-### Niveau 4 — `ticker_halt_metrics.csv`
+Example:
 
----
+`LUDP 10:45:00 â†’ 10:55:12`
+`M 10:45:00 â†’ 10:55:12`
 
-## 4. Métriques officielles
+Result:
 
-| Colonne | Définition |
-|---|---|
-| `total_halt_episodes` | Nombre total d’épisodes |
-| `halt_days` | Jours avec ≥1 HALT |
-| `halt_days_at_close` | Jours où le HALT est actif à 16:00 |
-| `halt_at_close_pct` | `halt_days_at_close / halt_days × 100` |
-| `halts_per_halt_day` | `total_halt_episodes / halt_days` |
-| `halts_per_market_day` | `total_halt_episodes / jours de marché observés` |
-| `avg_halt_duration_minutes` | Durée moyenne |
-| `median_halt_duration_minutes` | Durée médiane |
-| `min_halt_duration_minutes` | Durée minimale |
-| `max_halt_duration_minutes` | Durée maximale |
-| `first_halt_date` | Première date observée |
-| `last_halt_date` | Dernière date observée |
+`1 CORE HALT episode`
 
-Les définitions de calcul n’ont pas été modifiées par la V0.7.
+Both reason codes may remain as descriptive attributes.
 
----
+### 3.3 NULL End
 
-## 5. Niveau 5 — `ticker_halt_reason_metrics.csv`
+Example:
 
-Regroupement par :
+`ABC 12:45:56 â†’ NULL`
+`ABC 12:45:56 â†’ 13:23:12`
 
-```text
-symbol
-reason_code
-```
+Result:
 
-Métriques :
+`1 CORE HALT episode`
 
-- nombre d’épisodes;
-- durée moyenne;
-- durée minimale;
-- durée maximale.
+The valid end is used for duration/temporal calculations.
 
----
+If no valid end exists, `halt_end = NULL`.
 
-## 6. Définitions officielles
+## 4. Historical / Predictive Metrics
 
-### HALT Day
+### Metric 1 â€” Number of Halt Days
 
-Nombre de journées de marché pendant lesquelles un ticker possède au moins un HALT.
+Number of distinct trading days in the historical window on which the ticker experienced at least one qualifying HALT.
 
-Plusieurs HALT durant la même journée comptent pour **1 seul halt_day**.
+`COUNT(DISTINCT halt_trading_day)`
 
-### HALT at Close
+Multiple HALTs on one trading day count once.
 
-Un HALT est actif à la clôture lorsque :
+### Metric 2 â€” Average Halts per Halt Day
 
-```text
-effective_start ≤ 16:00:00 ≤ effective_end
-```
+`Total qualifying CORE HALT episodes / Number of Halt Days`
 
-La référence est la clôture régulière Nasdaq à 16:00 ET.
+If Number of Halt Days is zero:
 
-Si le statut de l’épisode est :
+`N/A`
 
-```text
-UNKNOWN
-```
+Multiple reason codes for one continuous episode count once.
 
-la situation ne doit pas être transformée silencieusement en YES ou NO.
+### Metric 3 â€” Days Since Last Halt
 
-### HALT multi-day
+Number of calendar days between the most recent Halt Day and `T`.
 
-Un épisode peut couvrir plusieurs journées de marché.
+`T - most_recent_halt_day`
 
-Exemple :
+If no qualifying HALT occurred in the historical window:
 
-```text
-Début : vendredi 09:23
-Fin   : lundi 09:00
-```
+`N/A`
 
-Résultat :
+### Metric 4 â€” Average Time Between Halt Days
 
-```text
-1 épisode
-2 halt_days
-1 journée à la clôture
-```
+Average number of calendar days between consecutive distinct Halt Days.
 
-Le calcul de `halt_days` pour un épisode multi-jours doit utiliser un calendrier de marché validé, et non une simple séquence de dates calendaires.
+If fewer than two Halt Days are available:
 
----
+`N/A`
 
-## 7. Contrôles de cohérence
+### Metric 5 â€” Sequential Halt Days Identified
 
-Le pipeline doit vérifier :
+`Yes` when at least two consecutive trading sessions contain a qualifying HALT; otherwise `No`.
 
-```text
-episodes >= halt_days
-halt_days_at_close <= halt_days
-0 <= halt_at_close_pct <= 100
-duration_minutes >= 0
-```
+Weekends and market holidays do not interrupt a sequential block.
 
-Pour PostgreSQL Analytics, ces contrôles seront appliqués lors de l’implémentation de la couche analytique.
+### Metric 6 â€” Number of Sequential Halt-Day Blocks
 
----
+Number of distinct blocks containing at least two consecutive trading days with a qualifying HALT.
 
-## 8. Cas de validation officiels
+### Metric 7 â€” Average Sequential Block Length
 
-### QVCG
+Average number of trading days across all sequential Halt-Day blocks.
 
-```text
-2 épisodes
-2 halt_days
-2 halt_days_at_close
-100 %
-```
+If no sequential block exists:
 
-### BCARU
+`N/A`
 
-```text
-12 épisodes
-5 halt_days
-1 halt_day_at_close
-20 %
-```
+### Metric 8 â€” Maximum Sequential Block Length
 
-Ces deux tickers constituent les tests de non-régression officiels.
+Maximum number of consecutive trading days in any sequential Halt-Day block.
 
----
+If no sequential block exists:
 
-## 9. Statut de clôture
+`N/A`
 
-La représentation de référence est maintenant :
+### Metric 9 â€” Number of Halt Days at Close
 
-```text
-halt_close_status
-```
+Number of distinct trading days in the historical window for which the ticker remained in HALT at market close.
 
-Valeurs :
+Market close:
 
-```text
-YES
-NO
-UNKNOWN
-MULTI_DAY
-```
+`16:00 ET`
 
-La valeur :
+A multi-day episode may contribute one Halt-at-Close day for each trading day on which it remains halted at 16:00 ET.
 
-```text
-MULTI_DAY
-```
+Example:
 
-indique qu’un épisode traverse plusieurs journées et doit être traité avec la logique dédiée des épisodes multi-jours.
+`Monday 14:30 â†’ Wednesday 10:00`
 
-Les métriques `halt_days_at_close` et `halt_at_close_pct` doivent être dérivées de l’activité réelle de l’épisode sur les journées de marché concernées.
+contributes:
+- Monday = Halt at close
+- Tuesday = Halt at close
+- Wednesday = not Halt at close
 
----
+Result:
 
-## 10. Versionnement
+`2 Halt Days at Close`
 
-- **V0.5.1** : logique des épisodes et HALT à la clôture validée.
-- **V0.6** : ajout des métriques `halts_per_halt_day`, `halts_per_market_day` et `median_halt_duration_minutes`.
-- **V0.7** : alignement documentaire avec `halt_close_status` et le modèle CORE V1.1; aucune définition métier existante n’est volontairement modifiée.
+## 5. Observation-Day Metrics
 
-Toute modification d’une définition de métrique doit créer une nouvelle version de cette spécification.
+### Metric 10 â€” Did the Ticker HALT the Specified Day?
+
+`Yes` if at least one qualifying CORE HALT episode occurred on `T`; otherwise `No`.
+
+### Metric 11 â€” Number of HALTs on the Specified Day
+
+If Metric 10 = `Yes`, return the number of qualifying CORE HALT episodes during `T`.
+
+If Metric 10 = `No`, return `0`.
+
+Multiple reason codes for one continuous episode count once.
+
+## 6. Reason-Code Filtering
+
+Default selection:
+
+`LULD`
+
+The application supports:
+- a single reason code
+- aggregation of multiple reason codes
+
+An aggregation acts as a logical OR for qualification.
+
+If several selected reason codes occur in the same continuous episode, that episode is counted once.
+
+## 7. Temporal Integrity / Look-Ahead Prevention
+
+Metrics 1â€“9 shall use only information available before `T`.
+
+Therefore:
+- events after `T` cannot influence Metrics 1â€“9;
+- `T` itself is excluded from Metrics 1â€“9;
+- Metrics 10â€“11 explicitly use `T`.
+
+This distinction is mandatory for future predictive-model use.
+
+## 8. Trading Calendar
+
+Sequential-day calculations use the market trading calendar.
+
+Weekends and market holidays do not break a sequential block.
+
+Calendar-day arithmetic is used for Metrics 3 and 4.
+
+## 9. Output Order
+
+The output metric columns shall appear in this order:
+
+1. Number of Halt Days
+2. Average Halts per Halt Day
+3. Days Since Last Halt
+4. Average Time Between Halt Days
+5. Sequential Halt Days Identified
+6. Number of Sequential Halt-Day Blocks
+7. Average Sequential Block Length
+8. Maximum Sequential Block Length
+9. Number of Halt Days at Close
+10. Did the Ticker HALT the Specified Day?
+11. Number of HALTs on the Specified Day
+
+## 10. Batch Calculation Principle
+
+For each ticker/date/reason-code context, Metrics 1â€“9 should be derived from a reusable historical HALT dataset rather than independently re-reading and recalculating the same source data for each metric.
+
+The implementation shall support potentially large batch files and should reuse overlapping historical calculations where practical without changing metric results.
