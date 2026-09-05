@@ -90,47 +90,8 @@ def parse_halt_close_status(value: str | None):
     return value
 
 
-def load_tradehalts(conn):
-    inserted = 0
-    existing = 0
-
-    sql = """
-        INSERT INTO raw.nasdaq_trade_halt (
-            symbol,
-            issue_name,
-            market,
-            reason_code,
-            halt_date,
-            halt_time,
-            resumption_date,
-            resumption_quote_time,
-            resumption_trade_time,
-            pause_threshold_price,
-            source_file
-        )
-        VALUES (
-            %(symbol)s,
-            %(issue_name)s,
-            %(market)s,
-            %(reason_code)s,
-            %(halt_date)s,
-            %(halt_time)s,
-            %(resumption_date)s,
-            %(resumption_quote_time)s,
-            %(resumption_trade_time)s,
-            %(pause_threshold_price)s,
-            %(source_file)s
-        )
-        ON CONFLICT (
-            symbol,
-            halt_date,
-            halt_time,
-            reason_code,
-            market
-        )
-        DO NOTHING
-        RETURNING id;
-    """
+def _read_tradehalt_rows():
+    rows = []
 
     with TRADEHALTS_FILE.open(
         "r",
@@ -139,91 +100,28 @@ def load_tradehalts(conn):
     ) as f:
         reader = csv.DictReader(f)
 
-        with conn.cursor() as cur:
-            for row in reader:
-                params = {
-                    "symbol": row["symbol"].strip(),
-                    "issue_name": empty_to_none(
-                        row["issue_name"]
-                    ),
-                    "market": row["market"].strip(),
-                    "reason_code": row[
-                        "reason_code"
-                    ].strip(),
-                    "halt_date": parse_date(
-                        row["halt_date"]
-                    ),
-                    "halt_time": parse_time(
-                        row["halt_time"]
-                    ),
-                    "resumption_date": parse_date(
-                        row["resumption_date"]
-                    ),
-                    "resumption_quote_time": parse_time(
-                        row["resumption_quote_time"]
-                    ),
-                    "resumption_trade_time": parse_time(
-                        row["resumption_trade_time"]
-                    ),
-                    "pause_threshold_price": parse_decimal(
-                        row["pause_threshold_price"]
-                    ),
-                    "source_file": TRADEHALTS_FILE.name,
-                }
+        for row in reader:
+            rows.append(
+                (
+                    row["symbol"].strip(),
+                    empty_to_none(row["issue_name"]),
+                    row["market"].strip(),
+                    row["reason_code"].strip(),
+                    parse_date(row["halt_date"]),
+                    parse_time(row["halt_time"]),
+                    parse_date(row["resumption_date"]),
+                    parse_time(row["resumption_quote_time"]),
+                    parse_time(row["resumption_trade_time"]),
+                    parse_decimal(row["pause_threshold_price"]),
+                    TRADEHALTS_FILE.name,
+                )
+            )
 
-                cur.execute(sql, params)
-
-                if cur.fetchone() is None:
-                    existing += 1
-                else:
-                    inserted += 1
-
-    return inserted, existing
+    return rows
 
 
-def load_episodes(conn):
-    inserted = 0
-    existing = 0
-
-    select_raw_sql = """
-        SELECT id
-        FROM raw.nasdaq_trade_halt
-        WHERE symbol = %(symbol)s
-          AND market = %(market)s
-          AND reason_code = %(reason_code)s
-          AND halt_date = %(halt_date)s
-          AND halt_time = %(halt_time)s;
-    """
-
-    insert_episode_sql = """
-        INSERT INTO core.nasdaq_halt_episode (
-            trade_halt_id,
-            collector_episode_id,
-            symbol,
-            issue_name,
-            market,
-            reason_code,
-            halt_start,
-            halt_end,
-            duration_minutes,
-            halt_close_status
-        )
-        VALUES (
-            %(trade_halt_id)s,
-            %(collector_episode_id)s,
-            %(symbol)s,
-            %(issue_name)s,
-            %(market)s,
-            %(reason_code)s,
-            %(halt_start)s,
-            %(halt_end)s,
-            %(duration_minutes)s,
-            %(halt_close_status)s
-        )
-        ON CONFLICT (trade_halt_id)
-        DO NOTHING
-        RETURNING id;
-    """
+def _read_episode_rows():
+    rows = []
 
     with EPISODES_FILE.open(
         "r",
@@ -232,89 +130,525 @@ def load_episodes(conn):
     ) as f:
         reader = csv.DictReader(f)
 
-        with conn.cursor() as cur:
-            for row in reader:
-                halt_start = parse_timestamp(
-                    row["halt_start"]
+        for row in reader:
+            halt_start = parse_timestamp(row["halt_start"])
+
+            if halt_start is None:
+                raise RuntimeError(
+                    "CORE episode has no halt_start"
                 )
 
-                params = {
-                    "collector_episode_id": empty_to_none(
-                        row["episode_id"]
-                    ),
-                    "symbol": row["symbol"].strip(),
-                    "issue_name": empty_to_none(
-                        row["issue_name"]
-                    ),
-                    "market": row["market"].strip(),
-                    "reason_code": row["reason_code"].strip(),
-                    "halt_start": halt_start,
-                    "halt_end": parse_timestamp(
-                        row["halt_end"]
-                    ),
-                    "duration_minutes": empty_to_none(
-                        row["duration_minutes"]
-                    ),
-                    "halt_close_status": parse_halt_close_status(
+            rows.append(
+                (
+                    empty_to_none(row["episode_id"]),
+                    row["symbol"].strip(),
+                    empty_to_none(row["issue_name"]),
+                    row["market"].strip(),
+                    empty_to_none(row["reason_code"]),
+                    halt_start,
+                    parse_timestamp(row["halt_end"]),
+                    empty_to_none(row["duration_minutes"]),
+                    parse_halt_close_status(
                         row["halt_at_close"]
                     ),
-                    "halt_date": halt_start.date(),
-                    "halt_time": halt_start.time(),
-                }
-
-                cur.execute(select_raw_sql, params)
-                raw_result = cur.fetchone()
-
-                if raw_result is None:
-                    raise RuntimeError(
-                        "RAW halt not found for "
-                        f"{params['symbol']} "
-                        f"{params['halt_date']} "
-                        f"{params['halt_time']} "
-                        f"{params['reason_code']} "
-                        f"{params['market']}"
-                    )
-
-                params["trade_halt_id"] = raw_result[0]
-
-                cur.execute(
-                    insert_episode_sql,
-                    params,
                 )
+            )
 
-                result = cur.fetchone()
+    return rows
 
-                if result is None:
-                    existing += 1
-                else:
-                    inserted += 1
 
-    return inserted, existing
+def _create_stage_tables(cur):
+    cur.execute(
+        """
+        CREATE TEMP TABLE stage_nasdaq_tradehalt_v12 (
+            symbol varchar(20) NOT NULL,
+            issue_name text,
+            market varchar(10) NOT NULL,
+            reason_code varchar(20) NOT NULL,
+            halt_date date NOT NULL,
+            halt_time time NOT NULL,
+            resumption_date date,
+            resumption_quote_time time,
+            resumption_trade_time time,
+            pause_threshold_price numeric(18,6),
+            source_file text
+        ) ON COMMIT DROP;
+
+        CREATE TEMP TABLE stage_nasdaq_episode_v12 (
+            collector_episode_id varchar(20),
+            symbol varchar(20) NOT NULL,
+            issue_name text,
+            market varchar(10) NOT NULL,
+            reason_code varchar(20),
+            halt_start timestamp NOT NULL,
+            halt_end timestamp,
+            duration_minutes numeric(12,3),
+            halt_close_status varchar(20)
+        ) ON COMMIT DROP;
+        """
+    )
+
+
+def _copy_rows(cur, table_name, columns, rows):
+    if not rows:
+        return
+
+    column_sql = ", ".join(columns)
+
+    with cur.copy(
+        f"COPY {table_name} ({column_sql}) FROM STDIN"
+    ) as copy:
+        for row in rows:
+            copy.write_row(row)
+
+
+def load_tradehalts(cur):
+    """
+    Charge en mode set-based les identités RAW V1.2.
+
+    Le CSV peut contenir plusieurs observations pour une même
+    identité RAW. La staging table est donc dédupliquée avant
+    l'INSERT.
+    """
+    cur.execute(
+        """
+        WITH source AS (
+            SELECT DISTINCT ON (
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code
+            )
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_date,
+                halt_time,
+                pause_threshold_price,
+                source_file
+            FROM stage_nasdaq_tradehalt_v12
+            ORDER BY
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                (issue_name IS NOT NULL) DESC,
+                (pause_threshold_price IS NOT NULL) DESC
+        ),
+        inserted AS (
+            INSERT INTO raw.nasdaq_trade_halt (
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_date,
+                halt_time,
+                pause_threshold_price,
+                source_file
+            )
+            SELECT
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_date,
+                halt_time,
+                pause_threshold_price,
+                source_file
+            FROM source
+            ON CONFLICT (
+                symbol,
+                halt_date,
+                halt_time,
+                reason_code,
+                market
+            )
+            DO NOTHING
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*) FROM inserted),
+            (SELECT count(*) FROM source);
+        """
+    )
+
+    inserted, total = cur.fetchone()
+    return inserted, total - inserted
+
+
+def load_resumptions(cur):
+    """
+    Charge les observations de reprise en une opération set-based.
+
+    La contrainte V1.2 UNIQUE NULLS NOT DISTINCT rend le
+    ON CONFLICT idempotent même lorsque quote/trade time est NULL.
+    """
+    cur.execute(
+        """
+        WITH source AS (
+            SELECT DISTINCT
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time,
+                source_file
+            FROM stage_nasdaq_tradehalt_v12
+            WHERE resumption_date IS NOT NULL
+        ),
+        inserted AS (
+            INSERT INTO raw.nasdaq_resumption (
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time,
+                source_file
+            )
+            SELECT
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time,
+                source_file
+            FROM source
+            ON CONFLICT (
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time
+            )
+            DO NOTHING
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*) FROM inserted),
+            (SELECT count(*) FROM source);
+        """
+    )
+
+    inserted, total = cur.fetchone()
+    return inserted, total - inserted
+
+
+def load_episodes(cur):
+    """
+    Charge CORE et les relations CORE -> RAW en mode set-based.
+
+    Identité CORE V1.2:
+        (symbol, market, halt_start)
+
+    reason_code demeure descriptif.
+
+    CORE conserve les libellés de marché du dataset analytique
+    (NASDAQ / NYSE / AMEX / P / Z), tandis que RAW conserve les
+    codes source Nasdaq (Q / N / A / P / Z). La conversion est
+    appliquée uniquement lors des jointures CORE -> RAW.
+    """
+    cur.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM stage_nasdaq_episode_v12 s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM raw.nasdaq_trade_halt r
+                    WHERE r.symbol = s.symbol
+                      AND r.market = CASE s.market
+                          WHEN 'NASDAQ' THEN 'Q'
+                          WHEN 'NYSE' THEN 'N'
+                          WHEN 'AMEX' THEN 'A'
+                          ELSE s.market
+                      END
+                      AND r.halt_date = s.halt_start::date
+                      AND r.halt_time = s.halt_start::time
+                )
+            ) THEN
+                RAISE EXCEPTION
+                    'At least one CORE episode has no matching RAW halt';
+            END IF;
+        END
+        $$;
+        """
+    )
+
+    cur.execute(
+        """
+        WITH source AS (
+            SELECT DISTINCT ON (
+                symbol,
+                market,
+                halt_start
+            )
+                collector_episode_id,
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_start,
+                halt_end,
+                duration_minutes,
+                halt_close_status
+            FROM stage_nasdaq_episode_v12
+            ORDER BY
+                symbol,
+                market,
+                halt_start,
+                (halt_end IS NOT NULL) DESC,
+                halt_end DESC NULLS LAST,
+                collector_episode_id NULLS LAST
+        ),
+        prepared AS (
+            SELECT
+                s.*,
+                representative.id AS trade_halt_id
+            FROM source s
+            CROSS JOIN LATERAL (
+                SELECT r.id
+                FROM raw.nasdaq_trade_halt r
+                WHERE r.symbol = s.symbol
+                  AND r.market = CASE s.market
+                      WHEN 'NASDAQ' THEN 'Q'
+                      WHEN 'NYSE' THEN 'N'
+                      WHEN 'AMEX' THEN 'A'
+                      ELSE s.market
+                  END
+                  AND r.halt_date = s.halt_start::date
+                  AND r.halt_time = s.halt_start::time
+                ORDER BY
+                    CASE
+                        WHEN r.reason_code = s.reason_code
+                            THEN 0
+                        ELSE 1
+                    END,
+                    r.id
+                LIMIT 1
+            ) representative
+        ),
+        inserted AS (
+            INSERT INTO core.nasdaq_halt_episode (
+                trade_halt_id,
+                collector_episode_id,
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_start,
+                halt_end,
+                duration_minutes,
+                halt_close_status
+            )
+            SELECT
+                trade_halt_id,
+                collector_episode_id,
+                symbol,
+                issue_name,
+                market,
+                reason_code,
+                halt_start,
+                halt_end,
+                duration_minutes,
+                halt_close_status
+            FROM prepared
+            ON CONFLICT (
+                symbol,
+                market,
+                halt_start
+            )
+            DO NOTHING
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*) FROM inserted),
+            (SELECT count(*) FROM source);
+        """
+    )
+
+    inserted, total = cur.fetchone()
+    existing = total - inserted
+
+    cur.execute(
+        """
+        WITH desired AS (
+            SELECT DISTINCT
+                e.id AS episode_id,
+                r.id AS trade_halt_id
+            FROM stage_nasdaq_episode_v12 s
+            JOIN core.nasdaq_halt_episode e
+              ON e.symbol = s.symbol
+             AND e.market = s.market
+             AND e.halt_start = s.halt_start
+            JOIN raw.nasdaq_trade_halt r
+              ON r.symbol = s.symbol
+             AND r.market = CASE s.market
+                 WHEN 'NASDAQ' THEN 'Q'
+                 WHEN 'NYSE' THEN 'N'
+                 WHEN 'AMEX' THEN 'A'
+                 ELSE s.market
+             END
+             AND r.halt_date = s.halt_start::date
+             AND r.halt_time = s.halt_start::time
+        ),
+        inserted AS (
+            INSERT INTO core.nasdaq_halt_episode_event (
+                episode_id,
+                trade_halt_id
+            )
+            SELECT
+                episode_id,
+                trade_halt_id
+            FROM desired
+            ON CONFLICT (
+                episode_id,
+                trade_halt_id
+            )
+            DO NOTHING
+            RETURNING 1
+        )
+        SELECT
+            (SELECT count(*) FROM inserted),
+            (SELECT count(*) FROM desired);
+        """
+    )
+
+    relations_inserted, relations_total = cur.fetchone()
+
+    return (
+        inserted,
+        existing,
+        relations_inserted,
+        relations_total - relations_inserted,
+    )
+
 
 def main():
-    print("QuantLab - Nasdaq PostgreSQL Loader")
+    print("QuantLab - Nasdaq PostgreSQL Loader V1.2 (batch)")
     print()
 
+    print("Lecture des CSV...")
+    tradehalt_rows = _read_tradehalt_rows()
+    episode_rows = _read_episode_rows()
+
+    print(
+        f"Observations tradehalts : {len(tradehalt_rows)}"
+    )
+    print(
+        f"Episodes CSV            : {len(episode_rows)}"
+    )
+    print("Connexion PostgreSQL...")
+
     with get_connection() as conn:
-        raw_inserted, raw_existing = load_tradehalts(
-            conn
-        )
+        with conn.cursor() as cur:
+            print("Acquisition du verrou Nasdaq V1.2...")
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 1),
+            )
+            print("Verrou acquis.")
 
-        episode_inserted, episode_existing = (
-            load_episodes(conn)
-        )
+            _create_stage_tables(cur)
 
+            print("COPY staging tradehalts...")
+            _copy_rows(
+                cur,
+                "stage_nasdaq_tradehalt_v12",
+                (
+                    "symbol",
+                    "issue_name",
+                    "market",
+                    "reason_code",
+                    "halt_date",
+                    "halt_time",
+                    "resumption_date",
+                    "resumption_quote_time",
+                    "resumption_trade_time",
+                    "pause_threshold_price",
+                    "source_file",
+                ),
+                tradehalt_rows,
+            )
+
+            print("COPY staging episodes...")
+            _copy_rows(
+                cur,
+                "stage_nasdaq_episode_v12",
+                (
+                    "collector_episode_id",
+                    "symbol",
+                    "issue_name",
+                    "market",
+                    "reason_code",
+                    "halt_start",
+                    "halt_end",
+                    "duration_minutes",
+                    "halt_close_status",
+                ),
+                episode_rows,
+            )
+
+            print("Chargement RAW...")
+            raw_inserted, raw_existing = load_tradehalts(
+                cur
+            )
+
+            print("Chargement RESUMPTION...")
+            (
+                resumption_inserted,
+                resumption_existing,
+            ) = load_resumptions(cur)
+
+            print("Chargement CORE et relations...")
+            (
+                episode_inserted,
+                episode_existing,
+                relation_inserted,
+                relation_existing,
+            ) = load_episodes(cur)
+
+    print()
+    print("POSTGRESQL LOADER V1.2 TERMINÉ")
     print(
-        f"RAW inserted   : {raw_inserted}"
+        f"RAW inserted          : {raw_inserted}"
     )
     print(
-        f"RAW existing   : {raw_existing}"
+        f"RAW existing          : {raw_existing}"
     )
     print(
-        f"CORE inserted  : {episode_inserted}"
+        f"RESUMPTION inserted   : {resumption_inserted}"
     )
     print(
-        f"CORE existing  : {episode_existing}"
+        f"RESUMPTION existing   : {resumption_existing}"
+    )
+    print(
+        f"CORE inserted         : {episode_inserted}"
+    )
+    print(
+        f"CORE existing         : {episode_existing}"
+    )
+    print(
+        f"RELATION inserted     : {relation_inserted}"
+    )
+    print(
+        f"RELATION existing     : {relation_existing}"
     )
 
 
