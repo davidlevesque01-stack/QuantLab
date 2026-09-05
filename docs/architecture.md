@@ -2,31 +2,40 @@
 
 ## 1. Purpose
 
-QuantLab is a collaborative quantitative data platform designed to acquire, store, process, analyze, and model financial and public datasets.
+QuantLab is a collaborative quantitative data platform designed to acquire, preserve, normalize, store, analyze, and model financial and public datasets.
 
-The architecture is designed initially for two independent remote collaborators while remaining scalable to a future corporate environment.
+The architecture initially supports two independent remote collaborators while remaining portable to a future corporate environment.
+
+This document is authoritative for major platform-level architectural decisions. Component-specific implementation details belong in the corresponding technical documents.
+
+---
 
 ## 2. Architecture Principles
 
-The platform follows these principles:
+QuantLab follows these principles:
 
 1. Source code is separated from production data.
 2. GitHub is the authoritative source for code and technical documentation.
 3. PostgreSQL is the authoritative source for structured production data.
-4. Original RAW source files are retained when required for provenance and rebuildability.
-5. Data collectors operate independently.
-6. Analytics are separated from data acquisition.
+4. Original immutable RAW source files are retained when required for provenance and rebuildability.
+5. Collectors operate as independent components.
+6. Analytics are separated from acquisition and source normalization.
 7. Common functionality is centralized in shared components.
-8. Automated execution is centralized to prevent duplicate jobs.
-9. Manual execution remains possible when authorized.
-10. Application processes follow the principle of least privilege.
-11. Credentials and secrets must never be committed to Git.
-12. Database schema changes are implemented through versioned migrations.
-13. The architecture must remain portable between infrastructure providers.
-14. Database persistence must be idempotent where source data may be processed more than once.
-15. Data-model ambiguities must fail explicitly rather than silently discard or arbitrarily associate source data.
-16. Incremental source observations may enrich existing structured data without erasing previously known information.
-17. Immutable source snapshots should be retained when repeated observations are required for provenance or reconstruction.
+8. Application processes follow the principle of least privilege.
+9. Credentials and secrets must never be committed to Git.
+10. Database schema changes are implemented through versioned migrations.
+11. Applied migrations are not modified retroactively.
+12. The architecture must remain portable between infrastructure providers.
+13. Database persistence must be idempotent when source data can be processed more than once.
+14. Ambiguous data-model relationships must fail explicitly rather than silently discard or arbitrarily associate data.
+15. Repeated source observations may enrich structured data without erasing previously known valid information.
+16. Observation-level provenance and canonical business representations are distinct concepts.
+17. Data-quality corrections must be explicit and testable.
+18. PostgreSQL constraints remain the final protection for data integrity.
+19. Concurrent cooperating Nasdaq persistence processes are serialized with an application-level PostgreSQL advisory lock.
+20. Development tooling must preserve UTF-8 source files without introducing encoding artifacts.
+
+---
 
 ## 3. Logical Architecture
 
@@ -38,7 +47,7 @@ External Data Sources
         v
     Collectors
         |
-        +----> Original / Immutable RAW Files
+        +----> Immutable RAW Source Files
         |          |
         |          +----> Provenance / Rebuild
         |
@@ -46,22 +55,29 @@ External Data Sources
 Parsing / Normalization
         |
         v
-PostgreSQL RAW
+Observation Deduplication
         |
-        v
-PostgreSQL CORE
-        |
-        v
-     Analytics
-        |
-   +----+----+
-   |         |
- Models    Reports
+        +----------------------+
+        |                      |
+        v                      v
+Structured RAW Canonical   Structured RAW Observations
+        |                      |
+        +----------+-----------+
+                   |
+                   v
+             PostgreSQL CORE
+                   |
+                   v
+                Analytics
+                   |
+             +-----+-----+
+             |           |
+           Models      Reports
 ```
 
-For sources where original files are retained, PostgreSQL provides the authoritative structured representation while the original RAW files preserve provenance and rebuildability.
+Processed CSV files may remain available for validation, diagnostics, exports and non-regression testing, but they are not the production integration layer between collectors and PostgreSQL.
 
-Processed CSV files may be retained as validation, diagnostic, export or non-regression artifacts, but they are not the production integration layer between collectors and PostgreSQL.
+---
 
 ## 4. Repository Architecture
 
@@ -97,46 +113,20 @@ QuantLab/
 +-- README.md
 +-- pyproject.toml
 +-- .gitignore
++-- .editorconfig
 ```
-
-Each collector is designed as an independent component.
 
 Database migrations and reusable SQL queries are centralized under `database/`.
 
 Common application functionality is centralized under `shared/`.
 
-Source-specific PostgreSQL persistence logic remains with the source component when it depends on source-specific business semantics.
+Source-specific persistence rules remain with the source component when they depend on source-specific business semantics.
 
-Integration tests that exercise multiple architectural layers are maintained under:
+---
 
-```text
-tests/integration/
-```
+## 5. Nasdaq Halt Collector
 
-## 5. Data Collectors
-
-Collectors retrieve information from external data sources.
-
-Initial collector:
-
-- Nasdaq Trading Halts.
-
-Potential future collectors may include:
-
-- market prices;
-- warrants and other securities data;
-- SEC filings;
-- economic indicators;
-- public statistics;
-- other financial datasets.
-
-Collectors must not contain unrelated analytics or predictive models.
-
-### Nasdaq Halt Collector
-
-The Nasdaq Halt Collector currently uses the V0.8 integration architecture.
-
-The historical metric pipeline remains functionally compatible with the validated V0.6/V0.7 baseline while shared parsing, episode construction and PostgreSQL persistence are now used by both historical and live processing.
+The Nasdaq Halt Collector currently provides the most complete reference implementation of the QuantLab ingestion architecture.
 
 Current source modules include:
 
@@ -148,67 +138,64 @@ nasdaq_deduplication.py
 nasdaq_episodes.py
 nasdaq_postgresql.py
 calculate_halt_metrics.py
+load_postgresql.py
 ```
 
-### Historical Acquisition
+### 5.1 Historical Acquisition
 
-Historical RAW files use immutable date-based names such as:
+Historical immutable source files use date-based names such as:
 
 ```text
 tradehalts_2026-08-03.xml
 tradehalts_2026-08-04.xml
 ```
 
-and are stored under:
+and are stored under the collector RAW historical directory.
 
-```text
-collectors/nasdaq_halts/data/raw/nasdaq/historical/
-```
+### 5.2 Live Acquisition
 
-### Live Acquisition
-
-Each live collection creates an immutable timestamped XML snapshot under:
-
-```text
-collectors/nasdaq_halts/data/raw/nasdaq/live/
-```
-
-using:
+Live collection creates immutable timestamped XML snapshots such as:
 
 ```text
 tradehalts_live_YYYYMMDDTHHMMSSZ.xml
 ```
 
-The collector also maintains:
+A convenience copy may also be maintained as:
 
 ```text
 latest_tradehalts.xml
 ```
 
-as a convenience copy of the most recent feed.
+The convenience copy is not the immutable provenance artifact.
 
-`latest_tradehalts.xml` is not the immutable provenance artifact.
+### 5.3 Shared Parsing
 
-### Shared Processing
-
-Historical and live data use a common XML parser:
+Historical and live inputs use a common parser:
 
 ```text
 nasdaq_xml.py
 ```
 
-The parser normalizes the currently observed source difference:
+The parser normalizes currently observed source differences such as:
 
 ```text
 Historical : Mkt
 Live       : Market
 ```
 
-Shared deduplication is implemented in:
+### 5.4 Observation Deduplication
+
+Shared observation deduplication is implemented in:
 
 ```text
 nasdaq_deduplication.py
 ```
+
+The Python observation identity is intentionally not identical to the PostgreSQL canonical RAW natural key.
+
+`unique_events` represents distinct Nasdaq observations, not necessarily one row in `raw.nasdaq_trade_halt`.
+
+### 5.5 Episode Construction
 
 Shared episode construction is implemented in:
 
@@ -216,100 +203,459 @@ Shared episode construction is implemented in:
 nasdaq_episodes.py
 ```
 
-### Nasdaq V0.8 Data Flow
+The CORE V1.2 identity is:
 
 ```text
-                 Nasdaq
-                /      \
-               /        \
-              v          v
-        Historical      Live RSS
-             |             |
-             v             v
-      Historical XML   Immutable Live
-                       XML Snapshot
-             \             /
-              \           /
-               v         v
-             Shared XML Parser
-                    |
-                    v
-              Normalized Events
-                    |
-                    v
-               Deduplication
-                    |
-                    v
-               unique_events
-                /        \
-               v          v
-       PostgreSQL RAW   Optional /
-               |        Derived CSV
-               v
-        Episode Builder
-               |
-               v
-            episodes
-               |
-               v
-       PostgreSQL CORE
-               |
-               v
-       Analytics / Metrics
+symbol
+market
+halt_start
 ```
 
-The production PostgreSQL path does not depend on processed CSV files.
+`reason_code` is descriptive at CORE level and is not part of the V1.2 CORE identity.
 
-Processed CSV datasets remain useful for:
+---
 
-- non-regression testing;
-- diagnostics;
-- comparison;
-- manual inspection;
-- optional exports.
+## 6. Nasdaq PostgreSQL Persistence V1.2
 
-The legacy CSV PostgreSQL loader remains available as a transitional validation/migration mechanism but is not the production integration architecture.
+Nasdaq-specific PostgreSQL persistence is implemented in:
 
-## 6. Shared Components
+```text
+collectors/nasdaq_halts/src/nasdaq_postgresql.py
+```
 
-Reusable functionality is maintained under `shared/`.
+Current application persistence version:
 
-Current and planned responsibilities include:
+```text
+VERSION = "1.2"
+```
 
-- PostgreSQL connectivity;
-- application configuration;
-- logging;
-- retry mechanisms;
-- date/time utilities;
-- common validation functions.
-
-Collectors should reuse these components rather than implementing duplicate generic functionality.
-
-### PostgreSQL Connectivity
-
-Shared Python PostgreSQL connectivity is implemented under:
+The module uses the common database connectivity layer under:
 
 ```text
 shared/database/
 ```
 
-The current implementation uses Psycopg 3.
+Its responsibilities include:
 
-The dependency is declared in:
+- canonical RAW HALT persistence;
+- resumption observation persistence;
+- CORE episode persistence;
+- CORE-to-RAW relationship maintenance;
+- natural-key handling;
+- canonical resumption selection;
+- data-quality guards;
+- `inserted / updated / unchanged` accounting;
+- idempotence;
+- referential-integrity validation;
+- transaction control;
+- concurrency serialization.
+
+### 6.1 V1.2 Data Flow
 
 ```text
-pyproject.toml
+Nasdaq XML
+    |
+    v
+Parsing / Normalization
+    |
+    v
+Distinct Nasdaq Observations
+    |
+    +----------------------------+
+    |                            |
+    v                            v
+Canonical RAW HALT          RAW Resumption Observations
+raw.nasdaq_trade_halt       raw.nasdaq_resumption
+    |
+    v
+Episode Builder
+    |
+    v
+core.nasdaq_halt_episode
+    |
+    v
+core.nasdaq_halt_episode_event
 ```
 
-with:
+---
+
+## 7. PostgreSQL Data Architecture
+
+Production structured data is stored in centralized managed PostgreSQL.
+
+### 7.1 DEV Environment
+
+Current DEV reference environment:
+
+- Azure Database for PostgreSQL Flexible Server
+- Azure region: Canada Central
+- PostgreSQL: 17
+- Burstable compute
+- B1ms
+- 1 vCore
+- 2 GiB memory
+- 32 GiB storage
+- High availability: disabled
+- Backup retention: 7 days
+- Public network access restricted by Azure firewall rules
+- TLS enabled
+- PostgreSQL authentication
+
+Server:
+
+```text
+quantlab-postgres-dev.postgres.database.azure.com
+```
+
+Database:
+
+```text
+quantlab
+```
+
+Logical schemas:
+
+```text
+raw
+core
+analytics
+```
+
+---
+
+## 8. Nasdaq Data Model V1.2
+
+The physical Nasdaq PostgreSQL model is:
+
+```text
+Data Model V1.2
+```
+
+Primary objects:
+
+```text
+raw.nasdaq_trade_halt
+raw.nasdaq_resumption
+core.nasdaq_halt_episode
+core.nasdaq_halt_episode_event
+```
+
+### 8.1 Canonical RAW HALT
+
+`raw.nasdaq_trade_halt` represents one canonical HALT per V1.2 RAW natural key:
+
+```text
+symbol
+market
+halt_date
+halt_time
+reason_code
+```
+
+Multiple source observations may map to one canonical RAW HALT.
+
+### 8.2 RAW Resumption Observations
+
+`raw.nasdaq_resumption` preserves distinct resumption observations.
+
+Observation identity:
+
+```text
+symbol
+market
+halt_date
+halt_time
+reason_code
+resumption_date
+resumption_quote_time
+resumption_trade_time
+```
+
+The observation uniqueness constraint uses PostgreSQL:
+
+```sql
+UNIQUE NULLS NOT DISTINCT
+```
+
+so observations containing nullable quote/trade times remain idempotent.
+
+### 8.3 CORE Episode
+
+`core.nasdaq_halt_episode` represents the business episode.
+
+V1.2 CORE identity:
+
+```text
+symbol
+market
+halt_start
+```
+
+### 8.4 CORE-to-RAW Relationship
+
+`core.nasdaq_halt_episode_event` models:
+
+```text
+1 CORE episode -> N RAW events
+```
+
+The pair:
+
+```text
+episode_id
+trade_halt_id
+```
+
+is unique.
+
+---
+
+## 9. Canonical Resumption Policy
+
+Canonical RAW resumption fields are selected atomically from one source observation.
+
+Observations are classified conceptually as:
+
+```text
+Rank 2 : complete and temporally valid
+Rank 1 : partial but admissible
+Rank 0 : no usable resumption or temporally invalid
+```
+
+For multiple valid complete observations, the latest valid `halt_end` is selected deterministically.
+
+An impossible observation such as:
+
+```text
+halt_end < halt_start
+```
+
+is not used as the canonical RAW resumption.
+
+It is still preserved in:
+
+```text
+raw.nasdaq_resumption
+```
+
+for source fidelity.
+
+If all available resumption observations for a HALT are invalid, the canonical RAW resumption fields remain `NULL`.
+
+The V1.2 validation explicitly covered five all-invalid historical RAW keys.
+
+---
+
+## 10. Migration Architecture
+
+Current migration files:
+
+```text
+001_create_nasdaq_halts_schema.sql
+002_core_episode_event.sql
+002_fix_nasdaq_halt_close_status.sql
+003_update_nasdaq_raw_natural_key_v1_1.sql
+004_update_nasdaq_core_natural_key_v1_1.sql
+005_create_nasdaq_resumption.sql
+006_nasdaq_persistence_v1_2.sql
+```
+
+Two historical migrations use prefix `002`.
+
+This is a documented historical numbering anomaly and the files must not be renamed retroactively.
+
+Future migrations must use a new available migration number.
+
+### 10.1 Migration 006
+
+`006_nasdaq_persistence_v1_2.sql` aligns the physical PostgreSQL schema with the validated V1.2 persistence model.
+
+It includes:
+
+- RAW V1.2 deduplication and identity;
+- CORE V1.2 identity;
+- resumption observation deduplication;
+- `UNIQUE NULLS NOT DISTINCT`;
+- CORE/RAW relationship preservation;
+- referential-integrity validation;
+- transaction-scoped advisory locking.
+
+The migration has been validated end-to-end in DEV using a test copy that completed all statements and rolled back successfully.
+
+---
+
+## 11. Concurrency Architecture
+
+Nasdaq PostgreSQL persistence uses:
+
+```sql
+pg_advisory_xact_lock(716203, 1)
+```
+
+Reserved QuantLab Nasdaq lock key:
+
+```text
+(716203, 1)
+```
+
+The lock is acquired before persistence reads and writes and is held through:
+
+```text
+RAW
+RESUMPTION
+CORE
+CORE-to-RAW relationships
+```
+
+It is automatically released by `COMMIT` or `ROLLBACK`.
+
+Migration 006 uses the same lock, preventing a cooperating V1.2 migration and the Nasdaq persistence transaction from modifying the same model concurrently.
+
+A two-connection concurrency test validated that a second connection blocks until the first transaction releases the lock.
+
+Database uniqueness and referential constraints remain the final integrity safeguards.
+
+---
+
+## 12. Historical Validation Status
+
+The full historical corpus has now been processed and validated.
+
+Period:
+
+```text
+2020-01-01 -> 2026-08-28
+```
+
+Historical source files:
+
+```text
+2432
+```
+
+Observed market days:
+
+```text
+1738
+```
+
+Pipeline results:
+
+```text
+Raw source events        : 69186
+Distinct observations    : 68170
+Canonical RAW HALTs      : 68072
+CORE episodes            : 68017
+Distinct tickers         : 9718
+Daily rows               : 50000
+Calculated durations     : 67983
+```
+
+Close-status counts:
+
+```text
+YES       : 1777
+NO        : 62902
+UNKNOWN   : 34
+```
+
+The full-history validation replaced several provisional assumptions from the earlier 744-event baseline.
+
+---
+
+## 13. Idempotence Status
+
+The current V1.2 reference rerun produces:
+
+```text
+RAW inserted          : 0
+RAW updated           : 0
+RAW unchanged         : 68072
+
+RESUMPTION inserted   : 0
+RESUMPTION existing   : 68147
+
+CORE inserted         : 0
+CORE updated          : 0
+CORE unchanged        : 68017
+```
+
+Non-regression:
+
+```text
+QVCG TEST  : PASS
+BCARU TEST : PASS
+```
+
+This is the current sequential idempotence checkpoint.
+
+---
+
+## 14. BCARU Historical Fixture
+
+BCARU now uses a fixed historical regression fixture through:
+
+```text
+2026-08-27
+```
+
+The fixture validates:
+
+```text
+21 CORE episodes
+13 historical dates
+```
+
+and separately validates the 2026-08-03 close condition.
+
+Official BCARU observations also confirmed important V1.2 semantics:
+
+- partial and complete observations for the same HALT;
+- multiple HALTs on the same day;
+- T1/T2/T3 reason codes for the same `halt_start`;
+- `reason_code` must remain descriptive rather than part of CORE identity.
+
+---
+
+## 15. Referential Integrity
+
+Current validated integrity checks return zero for:
+
+```text
+broken CORE -> RAW references
+broken relationship -> CORE references
+broken relationship -> RAW references
+duplicate episode_id / trade_halt_id relationship pairs
+```
+
+These validations are also represented in migration 006.
+
+---
+
+## 16. Shared Components
+
+Reusable functionality is maintained under:
+
+```text
+shared/
+```
+
+Responsibilities include:
+
+- PostgreSQL connectivity;
+- configuration;
+- logging;
+- retry mechanisms;
+- date/time utilities;
+- common validation functions.
+
+Current shared PostgreSQL dependency:
 
 ```text
 psycopg[binary]>=3.3,<4
 ```
 
-Database connection parameters are supplied through environment variables rather than committed configuration files.
-
-Current variable names are:
+Environment variables:
 
 ```text
 QUANTLAB_DB_HOST
@@ -321,590 +667,93 @@ QUANTLAB_DB_PASSWORD
 
 Secrets must never be committed to Git.
 
-### Source-Specific Persistence
+---
 
-Nasdaq-specific PostgreSQL persistence is implemented in:
+## 17. Database Access Architecture
 
-```text
-collectors/nasdaq_halts/src/nasdaq_postgresql.py
-```
+QuantLab applies least privilege.
 
-This module uses the generic shared PostgreSQL connection layer but owns Nasdaq-specific persistence rules.
-
-Its current responsibilities include:
-
-- RAW event insertion;
-- RAW event enrichment;
-- CORE episode insertion;
-- CORE episode enrichment;
-- natural-key handling;
-- RAW identifier resolution;
-- first-source-file provenance preservation;
-- close-status validation;
-- protection against incomplete incoming observations;
-- idempotent persistence;
-- explicit RAW-to-CORE relationship validation;
-- transaction-safe RAW and CORE persistence;
-- `inserted / updated / unchanged` execution accounting.
-
-This separation prevents the generic `shared/database/` layer from acquiring Nasdaq-specific business semantics.
-
-## 7. Data Architecture
-
-Production structured data is stored in a centralized managed PostgreSQL instance.
-
-### DEV Environment
-
-The initial QuantLab database environment uses Azure Database for PostgreSQL Flexible Server.
-
-Current DEV configuration:
-
-- Azure region: Canada Central;
-- PostgreSQL version: 17;
-- compute tier: Burstable;
-- compute size: B1ms, 1 vCore, 2 GiB memory;
-- storage: 32 GiB;
-- high availability: disabled;
-- backup retention: 7 days;
-- network access: public access restricted by Azure firewall rules;
-- transport encryption: TLS;
-- authentication: PostgreSQL authentication.
-
-Server:
-
-```text
-quantlab-postgres-dev.postgres.database.azure.com
-```
-
-Primary database:
-
-```text
-quantlab
-```
-
-The database currently uses the following logical schemas:
-
-- `raw` — structured data close to the original source;
-- `core` — normalized business data;
-- `analytics` — derived analytical datasets, views and materialized views.
-
-### Nasdaq Halt Data Model
-
-For the Nasdaq Halt Collector, original Nasdaq XML files remain the provenance/source files from which structured PostgreSQL data can be rebuilt.
-
-The current PostgreSQL model contains:
-
-```text
-raw.nasdaq_trade_halt
-core.nasdaq_halt_episode
-```
-
-The physical PostgreSQL model remains:
-
-```text
-Data Model V1.1
-```
-
-The V0.8 work changes persistence semantics but does not require an additional schema migration.
-
-The initial schema was created through:
-
-```text
-database/migrations/001_create_nasdaq_halts_schema.sql
-```
-
-A second migration corrected the representation of the halt close status:
-
-```text
-database/migrations/002_fix_nasdaq_halt_close_status.sql
-```
-
-The original boolean representation:
-
-```text
-halt_at_close BOOLEAN
-```
-
-was replaced by:
-
-```text
-halt_close_status VARCHAR(20)
-```
-
-with supported values:
-
-```text
-YES
-NO
-UNKNOWN
-MULTI_DAY
-```
-
-### Validated Historical Baseline
-
-The historical validation dataset contains:
-
-```text
-RAW events           : 744
-Unique events        : 744
-CORE episodes        : 744
-Distinct tickers     : 235
-Daily rows           : 322
-Market days          : 10
-Calculated durations : 742
-
-YES                  : 15
-NO                   : 697
-UNKNOWN              : 2
-MULTI_DAY            : 30
-```
-
-Non-regression tests:
-
-```text
-QVCG : PASS
-BCARU: PASS
-```
-
-After introduction of V0.8 persistence semantics, a complete historical rerun produced:
-
-```text
-RAW inserted          : 0
-RAW updated           : 0
-RAW unchanged         : 744
-
-CORE inserted         : 0
-CORE updated          : 0
-CORE unchanged        : 744
-```
-
-This confirms that the V0.8 persistence logic does not generate unnecessary changes against the validated historical baseline.
-
-Fractional-second Nasdaq timestamps remain preserved through XML parsing, Python processing and PostgreSQL storage.
-
-### Validated Live Baseline
-
-A real Nasdaq RSS collection was processed through the V0.8 live pipeline.
-
-The validated lot contained:
-
-```text
-Raw events            : 35
-Unique events         : 35
-CORE episodes         : 35
-Calculated durations  : 23
-
-YES                   : 2
-NO                    : 17
-UNKNOWN               : 12
-MULTI_DAY             : 4
-```
-
-First PostgreSQL persistence:
-
-```text
-RAW inserted          : 35
-RAW updated           : 0
-RAW unchanged         : 0
-
-CORE inserted         : 35
-CORE updated          : 0
-CORE unchanged        : 0
-```
-
-A second collection against unchanged source content produced:
-
-```text
-RAW inserted          : 0
-RAW updated           : 0
-RAW unchanged         : 35
-
-CORE inserted         : 0
-CORE updated          : 0
-CORE unchanged        : 35
-```
-
-This validates real live idempotence for the current V0.8 architecture.
-
-### RAW Provenance
-
-Each structured RAW record contains:
-
-```text
-raw.nasdaq_trade_halt.source_file
-```
-
-Historical examples:
-
-```text
-tradehalts_2026-08-03.xml
-tradehalts_2026-08-04.xml
-```
-
-Live example:
-
-```text
-tradehalts_live_20260828T205115Z.xml
-```
-
-In V0.8, an existing RAW event retains the `source_file` of the first snapshot that created the structured event.
-
-Later snapshots may enrich the event without replacing this value.
-
-The immutable XML snapshot archive remains the primary provenance layer.
-
-PostgreSQL does not currently model the complete relationship:
-
-```text
-N source snapshots -> 1 RAW event
-```
-
-A future source-observation/provenance model may be added if required.
-
-### RAW Natural Key
-
-The current PostgreSQL RAW natural key is:
-
-```text
-symbol
-halt_date
-halt_time
-reason_code
-market
-```
-
-This key is enforced by a UNIQUE constraint.
-
-The Python deduplication key is not identical to the PostgreSQL RAW natural key.
-
-The historical baseline contains no collision.
-
-A validated live snapshot also contained:
-
-```text
-Events                 : 35
-Natural keys           : 35
-Duplicate natural keys : 0
-```
-
-This difference must continue to be monitored and must be explicitly validated against the complete historical dataset.
-
-### RAW-to-CORE Relationship
-
-The current PostgreSQL schema models:
-
-```text
-1 RAW event -> 1 CORE episode
-```
-
-This relationship is valid for:
-
-```text
-744 historical RAW / CORE records
-35 live RAW / CORE records
-```
-
-under the currently validated datasets.
-
-However, the Python episode-building algorithm can theoretically combine multiple overlapping RAW events into one episode.
-
-For this reason, `nasdaq_postgresql.py` uses strict relationship validation.
-
-If an episode cannot be associated unambiguously with exactly one RAW event, persistence fails explicitly rather than arbitrarily selecting a RAW event.
-
-The 1:1 model must be revalidated against the complete five-year history before being considered permanent.
-
-### Analytics Layer
-
-The `analytics` schema exists, but Nasdaq Halt analytical database objects are intentionally deferred.
-
-Before implementing them, QuantLab must validate:
-
-- authoritative market-calendar semantics;
-- weekends and market holidays;
-- multi-day halt behavior;
-- close-status semantics;
-- equivalence with the validated Python metrics.
-
-The current Python implementation does not yet constitute an authoritative exchange calendar.
-
-The future Nasdaq Halt analytics migration is currently planned as:
-
-```text
-database/migrations/003_create_nasdaq_halts_analytics.sql
-```
-
-The metric:
-
-```text
-halts_per_market_day
-```
-
-must not be implemented as a PostgreSQL analytical metric until an authoritative market-day denominator is modeled.
-
-## 8. Database Access Architecture
-
-QuantLab applies least-privilege database access.
-
-### Administrative Access
-
-The PostgreSQL administrator account is reserved for:
+Administrative access is reserved for:
 
 - initial provisioning;
-- schema migrations;
+- migrations;
 - role and privilege management;
-- operations explicitly requiring administrative privileges.
+- administrative operations.
 
-Application code must not use the administrator account for normal collector execution.
-
-### Application Role
-
-The current application role is:
+Application role:
 
 ```text
 quantlab_collector
 ```
 
-It is a `NOLOGIN` role containing the privileges required by the Nasdaq collector on its RAW and CORE objects.
-
-### DEV Login
-
-The current DEV application login is:
+DEV login:
 
 ```text
 quantlab_collector_dev
 ```
 
-This login inherits its application privileges through membership in:
+Application code must not use the PostgreSQL administrator account during normal collector execution.
 
-```text
-quantlab_collector
-```
+---
 
-Future environments should follow the same separation between application roles and environment-specific login identities.
-
-### Secrets
-
-Database passwords and other secrets must remain outside:
-
-- Git;
-- GitHub;
-- Markdown documentation;
-- committed source code;
-- committed configuration files.
-
-The current Python connection layer receives database credentials through environment variables.
-
-A centralized production secrets-management mechanism will be selected before PROD.
-
-## 9. PostgreSQL Integration Strategy
-
-### Direct V0.8 Persistence
-
-Direct Nasdaq-to-PostgreSQL persistence is implemented in:
-
-```text
-collectors/nasdaq_halts/src/nasdaq_postgresql.py
-```
-
-It is used by both:
-
-```text
-calculate_halt_metrics.py
-nasdaq_halt_collector.py
-```
-
-for historical processing and live processing respectively.
-
-The integration writes:
-
-```text
-unique_events
-    |
-    v
-raw.nasdaq_trade_halt
-
-episodes
-    |
-    v
-core.nasdaq_halt_episode
-```
-
-RAW and CORE persistence execute in a common PostgreSQL transaction.
-
-Database errors therefore prevent a partial operation from being treated as successful.
-
-### Incremental Update Semantics
-
-The V0.8 persistence layer distinguishes:
-
-```text
-inserted
-updated
-unchanged
-```
-
-An incoming live observation may enrich an existing event.
-
-General rule:
-
-```text
-Existing NULL + incoming value
--> update
-
-Existing value + incoming NULL
--> preserve existing value
-
-Existing value A + incoming A
--> unchanged
-
-Existing value A + incoming value B
--> update with B
-```
-
-This permits an initially open HALT to be completed later when Nasdaq publishes resumption information.
-
-For CORE close status, an incoming:
-
-```text
-UNKNOWN
-```
-
-does not overwrite a stored final:
-
-```text
-YES
-NO
-MULTI_DAY
-```
-
-### Controlled Integration Test
-
-The update lifecycle is validated through:
-
-```text
-tests/integration/test_nasdaq_postgresql_live_update.py
-```
-
-The test covers:
-
-```text
-open HALT
--> completed HALT
--> identical repeat
--> regressive incomplete observation
-```
-
-It runs inside a PostgreSQL transaction and performs a rollback after validation.
-
-The test database was verified to contain no residual synthetic test rows after execution.
-
-### Transitional CSV Loader
-
-A transitional PostgreSQL loader remains at:
-
-```text
-collectors/nasdaq_halts/src/load_postgresql.py
-```
-
-It was used to validate the initial PostgreSQL schema and integration against known CSV outputs.
-
-The CSV loader is retained as a validation/migration utility.
-
-It is not the production collector-to-PostgreSQL integration path.
-
-## 10. SQL Query Architecture
-
-Reusable SQL queries are stored under:
-
-```text
-database/queries/
-```
-
-Nasdaq Halt queries are currently stored under:
-
-```text
-database/queries/nasdaq_halts/
-```
-
-Current query files include:
-
-```text
-explore_halt_episodes.sql
-get_halts_per_symbol_and_date.sql
-visualize_halts_table.sql
-```
-
-These queries support:
-
-- development;
-- data exploration;
-- validation;
-- troubleshooting;
-- manual database inspection;
-- RAW source-file provenance inspection.
-
-For example:
-
-```sql
-SELECT DISTINCT
-    source_file
-FROM raw.nasdaq_trade_halt
-ORDER BY source_file;
-```
-
-Visual Studio Code with the PostgreSQL extension is currently used as a DEV database exploration and query tool.
-
-A broader user-facing database query interface remains a future implementation activity.
-
-## 11. Execution Architecture
+## 18. Execution Architecture
 
 QuantLab supports two execution modes.
 
 ### Automated
 
-Production collectors and analytical jobs will eventually execute from centralized infrastructure according to defined schedules.
+Future centralized infrastructure will execute collectors and analytical jobs on defined schedules.
 
-Centralized execution is required to avoid multiple collaborators independently triggering duplicate scheduled processing.
-
-Automated jobs must implement:
+Centralized execution must include:
 
 - idempotence;
 - execution logging;
 - error handling;
-- retry behavior where appropriate;
-- safeguards against duplicate processing;
-- concurrency control where simultaneous execution could affect database integrity.
-
-Automated centralized execution has not yet been implemented.
-
-### Concurrency
-
-The current Nasdaq V0.8 writer is validated for sequential execution.
-
-Its persistence logic performs a lookup followed by an insert or update.
-
-PostgreSQL UNIQUE constraints protect the natural key, but two collector processes running concurrently could compete between the lookup and insertion steps.
-
-Before allowing concurrent centralized execution, QuantLab must define an explicit strategy such as:
-
-```text
-PostgreSQL ON CONFLICT
-```
-
-or an appropriate locking mechanism.
+- appropriate retries;
+- duplicate-processing safeguards;
+- concurrency controls.
 
 ### On Demand
 
-Authorized collaborators may initiate approved jobs manually when required.
+Authorized collaborators may execute approved jobs manually.
 
-On-demand execution must use the same production processing logic and data-integrity safeguards as scheduled execution.
+On-demand execution must use the same production persistence rules and integrity protections as scheduled execution.
 
-The final centralized execution infrastructure has not yet been implemented.
+The Nasdaq persistence layer is already concurrency-hardened for cooperating processes through its PostgreSQL advisory lock.
 
-## 12. Collaboration Architecture
+The final centralized orchestration infrastructure remains to be implemented.
 
-### GitHub Repository
+---
+
+## 19. Analytics Layer
+
+The `analytics` schema exists, but Nasdaq Halt analytical database objects are not yet implemented.
+
+Conceptual objects include:
+
+```text
+analytics.ticker_halt_daily
+analytics.ticker_halt_metrics
+analytics.ticker_halt_reason_metrics
+```
+
+Before certification, PostgreSQL analytics must be reconciled with validated Python metrics.
+
+The official market-calendar model remains a prerequisite for metrics such as:
+
+```text
+halts_per_market_day
+```
+
+No analytics migration number is currently reserved.
+
+A future migration number must be selected from the actual migration directory state at implementation time.
+
+---
+
+## 20. Collaboration Architecture
+
+### GitHub
 
 Used for:
 
@@ -912,7 +761,7 @@ Used for:
 - version control;
 - technical documentation;
 - database migrations;
-- reusable SQL queries;
+- SQL queries;
 - releases;
 - pull requests;
 - code review.
@@ -926,47 +775,93 @@ Used for:
 - priorities;
 - ownership;
 - status;
-- development tracking.
+- target dates;
+- component and environment classification.
 
 ### PostgreSQL
 
 Used as the centralized authoritative structured data store.
 
-### Microsoft Teams / SharePoint
+### Microsoft Ecosystem
 
-Used for:
+Teams / SharePoint / Office documents may be used for collaborative non-code project material.
 
-- Word documents;
-- Excel workbooks;
-- meeting material;
-- collaborative Office documents;
-- non-code project files.
+---
 
-## 13. User Architecture
+## 21. Encoding and Tooling
 
-Each collaborator uses an individual account.
+The repository includes:
 
-Shared credentials should not be used.
+```text
+.editorconfig
+```
 
-Initially, the GitHub repository may be owned by an individual GitHub account and shared with the second collaborator.
+with UTF-8 configuration.
 
-If QuantLab becomes a corporate entity, repositories may be transferred to a GitHub Organization.
+PowerShell 5.1 requires special care because:
 
-The architecture should similarly permit future migration of cloud infrastructure from an individual environment to a corporate environment without redesigning the application architecture.
+```powershell
+Set-Content -Encoding utf8
+```
 
-## 14. Future Protected QuantLab Environment
+may write a UTF-8 BOM.
 
-A future protected analytical environment may operate independently from the Internet.
+For files that must be UTF-8 without BOM, particularly SQL migration files, use a no-BOM writer such as:
 
-Validated code and datasets may be transferred into this environment using controlled procedures.
+```powershell
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+```
 
-The protected analytical environment will not initially serve as the shared development infrastructure.
+PowerShell 7 evaluation is deferred until the Nasdaq/PostgreSQL checkpoint is fully documented and committed.
 
-Its purpose is to permit sensitive or controlled analytical workloads to operate separately from Internet-facing collection infrastructure.
+---
 
-## 15. Architecture Evolution
+## 22. Current Architecture Status
 
-This document is authoritative for major architectural decisions and must be updated whenever a change affects:
+Nasdaq PostgreSQL persistence has reached:
+
+```text
+Data Model V1.2
+PostgreSQL Persistence V1.2
+```
+
+Validated capabilities include:
+
+- full historical acquisition and processing;
+- live acquisition architecture;
+- immutable RAW XML provenance;
+- shared XML parsing;
+- observation-level deduplication;
+- canonical RAW HALT persistence;
+- resumption observation persistence;
+- CORE V1.2 identity;
+- 1 CORE -> N RAW relationship modeling;
+- canonical resumption selection;
+- invalid-resumption preservation;
+- referential integrity;
+- sequential idempotence;
+- concurrency advisory locking;
+- migration 006 validation;
+- QVCG regression;
+- BCARU historical fixture;
+- fractional-second timestamp preservation.
+
+Primary remaining architectural work includes:
+
+- official market-calendar modeling;
+- PostgreSQL analytics;
+- centralized orchestration;
+- backup / restore validation;
+- TEST / PROD preparation;
+- secrets-management strategy;
+- formal Nasdaq timezone semantics;
+- future hardening of nullable schema fields where justified.
+
+---
+
+## 23. Architecture Evolution
+
+This document must be updated whenever a change affects:
 
 - platform components;
 - infrastructure;
@@ -978,93 +873,16 @@ This document is authoritative for major architectural decisions and must be upd
 - security architecture;
 - collaboration model.
 
-Component-specific implementation details should be documented in the appropriate specialized documents, including:
+Detailed database semantics belong in:
 
 ```text
 docs/database.md
-collectors/nasdaq_halts/docs/ARCHITECTURE.md
-collectors/nasdaq_halts/docs/DATA_MODEL.md
 ```
 
-Architecture changes that require implementation work should also be reflected in the QuantLab GitHub Project.
-
-## 16. Work Management with GitHub Projects
-
-QuantLab uses a GitHub Project as the central work-management layer for the platform.
-
-The GitHub Project is used to manage:
-
-- backlog;
-- action items;
-- priorities;
-- ownership;
-- status;
-- target dates;
-- component classification;
-- environment classification.
-
-The standard workflow is:
+Collector-specific architecture belongs in:
 
 ```text
-Backlog
-  |
-  v
-Ready
-  |
-  v
-In Progress
-  |
-  v
-Review / Test
-  |
-  v
-Done
+collectors/nasdaq_halts/docs/ARCHITECTURE.md
 ```
 
-Standard project fields include:
-
-- Priority: Critical / High / Medium / Low
-- Component: Infrastructure / GitHub / Database / Collector / Analytics / Orchestration / Documentation / Collaboration / Security
-- Environment: DEV / TEST / PROD / N/A
-- Target date
-- Owner
-
-GitHub Issues and Pull Requests should be linked to the Project when implementation work, discussion, validation or code changes are required.
-
-## 17. Current Nasdaq Integration Status
-
-The Nasdaq Halt PostgreSQL integration has reached the V0.8 validation checkpoint.
-
-Validated capabilities include:
-
-- historical XML acquisition;
-- live RSS acquisition;
-- immutable historical RAW XML;
-- immutable timestamped live snapshots;
-- common historical/live XML parsing;
-- common deduplication;
-- common episode construction;
-- direct PostgreSQL RAW persistence;
-- direct PostgreSQL CORE persistence;
-- incremental enrichment of live HALTs;
-- protection against incomplete observations;
-- transaction-safe persistence;
-- historical idempotence;
-- live idempotence;
-- fractional-second timestamp preservation;
-- controlled live lifecycle integration testing;
-- QVCG and BCARU historical non-regression.
-
-The next major Nasdaq data milestone is the construction, loading and validation of the complete five-year historical dataset.
-
-That validation must re-examine the assumptions that remain provisional, particularly:
-
-- RAW natural-key uniqueness;
-- Python/PostgreSQL deduplication equivalence;
-- RAW-to-CORE cardinality;
-- merged episodes;
-- multi-day behavior;
-- timezone semantics;
-- source provenance;
-- official market-calendar semantics;
-- full-volume idempotence.
+Implementation work resulting from architecture changes should also be reflected in the QuantLab GitHub Project.

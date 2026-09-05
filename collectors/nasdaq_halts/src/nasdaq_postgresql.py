@@ -7,7 +7,7 @@ from shared.database import get_connection
 
 # ============================================================
 # QuantLab - Nasdaq PostgreSQL Persistence
-# VERSION 1.1
+# VERSION 1.2
 # ============================================================
 
 VERSION = "1.2"
@@ -207,14 +207,16 @@ def get_raw_natural_key(event):
 
         raw.nasdaq_trade_halt
 
-    Clé V1.1 :
+    Clé V1.2 :
         symbol
         halt_date
         halt_time
         reason_code
         market
-        resumption_date
-        resumption_trade_time
+
+    Les champs resumption_* ne font PAS partie de l'identité
+    du HALT. Les observations de reprise sont persistées dans
+    raw.nasdaq_resumption.
     """
 
     halt_start = event.get(
@@ -258,22 +260,12 @@ def get_raw_natural_key(event):
             f"RAW event has no reason_code: {symbol}"
         )
 
-    resumption_date = parse_date(
-        event.get("resumption_date")
-    )
-
-    resumption_trade_time = parse_time(
-        event.get("resumption_trade_time")
-    )
-
     return (
         symbol,
         halt_start.date(),
         halt_start.time(),
         reason_code,
         market,
-        resumption_date,
-        resumption_trade_time,
     )
 
 # ============================================================
@@ -567,6 +559,7 @@ def _prepare_episode_raw_groups(
             )
 
         raw_ids_for_episode = []
+        seen_raw_ids = set()
 
         for event in events:
 
@@ -586,18 +579,15 @@ def _prepare_episode_raw_groups(
                     f"natural key: {natural_key}"
                 )
 
-            raw_ids_for_episode.append(
-                trade_halt_id
-            )
+            if trade_halt_id not in seen_raw_ids:
 
-        if len(raw_ids_for_episode) != len(
-            set(raw_ids_for_episode)
-        ):
+                raw_ids_for_episode.append(
+                    trade_halt_id
+                )
 
-            raise RuntimeError(
-                "Duplicate RAW id inside CORE episode "
-                f"{episode.get('episode_id')}"
-            )
+                seen_raw_ids.add(
+                    trade_halt_id
+                )
 
         normalized_markets = {
             normalize_market(
@@ -730,8 +720,7 @@ def write_trade_halts(
     # 1. PRÉPARATION ET VALIDATION
     # ========================================================
 
-    prepared_events = []
-    seen_natural_keys = set()
+    prepared_by_key = {}
 
     for event in unique_events:
 
@@ -758,6 +747,128 @@ def write_trade_halts(
                 f"{event.get('symbol')}"
             )
 
+        resumption_date = parse_date(
+            event.get(
+                "resumption_date"
+            )
+        )
+
+        resumption_quote_time = parse_time(
+            event.get(
+                "resumption_quote_time"
+            )
+        )
+
+        resumption_trade_time = parse_time(
+            event.get(
+                "resumption_trade_time"
+            )
+        )
+
+        halt_end = event.get(
+            "halt_end"
+        )
+
+        # ----------------------------------------------------
+        # QUALITÉ DE L'OBSERVATION DE REPRISE
+        # ----------------------------------------------------
+        #
+        # Rang 2 :
+        #     reprise complète et chronologiquement valide.
+        #
+        # Rang 1 :
+        #     information de reprise partielle, par exemple
+        #     une date connue sans heure de reprise.
+        #
+        # Rang 0 :
+        #     aucune reprise exploitable ou observation
+        #     impossible avec halt_end < halt_start.
+        #
+        # Les champs de reprise sont sélectionnés comme un bloc
+        # afin de ne jamais mélanger plusieurs snapshots Nasdaq.
+        # ----------------------------------------------------
+
+        if (
+            halt_end is not None
+            and halt_end < halt_start
+        ):
+
+            canonical_resumption_date = None
+            canonical_resumption_quote_time = None
+            canonical_resumption_trade_time = None
+
+            resumption_rank = (
+                0,
+                "",
+                "",
+                "",
+                "",
+            )
+
+        elif halt_end is not None:
+
+            canonical_resumption_date = (
+                resumption_date
+            )
+
+            canonical_resumption_quote_time = (
+                resumption_quote_time
+            )
+
+            canonical_resumption_trade_time = (
+                resumption_trade_time
+            )
+
+            resumption_rank = (
+                2,
+                halt_end.isoformat(),
+                str(resumption_date or ""),
+                str(resumption_quote_time or ""),
+                str(resumption_trade_time or ""),
+            )
+
+        elif any(
+            (
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time,
+            )
+        ):
+
+            canonical_resumption_date = (
+                resumption_date
+            )
+
+            canonical_resumption_quote_time = (
+                resumption_quote_time
+            )
+
+            canonical_resumption_trade_time = (
+                resumption_trade_time
+            )
+
+            resumption_rank = (
+                1,
+                str(resumption_date or ""),
+                str(resumption_quote_time or ""),
+                str(resumption_trade_time or ""),
+                "",
+            )
+
+        else:
+
+            canonical_resumption_date = None
+            canonical_resumption_quote_time = None
+            canonical_resumption_trade_time = None
+
+            resumption_rank = (
+                0,
+                "",
+                "",
+                "",
+                "",
+            )
+
         params = {
             "symbol":
                 event["symbol"],
@@ -782,25 +893,13 @@ def write_trade_halts(
                 halt_start.time(),
 
             "resumption_date":
-                parse_date(
-                    event.get(
-                        "resumption_date"
-                    )
-                ),
+                canonical_resumption_date,
 
             "resumption_quote_time":
-                parse_time(
-                    event.get(
-                        "resumption_quote_time"
-                    )
-                ),
+                canonical_resumption_quote_time,
 
             "resumption_trade_time":
-                parse_time(
-                    event.get(
-                        "resumption_trade_time"
-                    )
-                ),
+                canonical_resumption_trade_time,
 
             "pause_threshold_price":
                 parse_decimal(
@@ -811,30 +910,125 @@ def write_trade_halts(
 
             "source_file":
                 source_file,
+
+            "_resumption_rank":
+                resumption_rank,
+
+            "_has_invalid_resumption":
+                (
+                    halt_end is not None
+                    and halt_end < halt_start
+                ),
+
+            "_has_admissible_resumption":
+                (
+                    resumption_rank[0] > 0
+                ),
         }
 
         natural_key = get_raw_natural_key(
             event
         )
 
-        if natural_key in seen_natural_keys:
-
-            raise RuntimeError(
-                "Duplicate RAW natural key "
-                "detected in unique_events: "
-                f"{natural_key}"
-            )
-
-        seen_natural_keys.add(
+        existing_prepared = prepared_by_key.get(
             natural_key
         )
 
-        prepared_events.append(
-            (
-                natural_key,
-                params
+        if existing_prepared is None:
+
+            prepared_by_key[
+                natural_key
+            ] = params
+
+        else:
+
+            existing_prepared["issue_name"] = (
+                prefer_new_value(
+                    existing_prepared["issue_name"],
+                    params["issue_name"]
+                )
             )
+
+            if (
+                params["_resumption_rank"]
+                > existing_prepared[
+                    "_resumption_rank"
+                ]
+            ):
+
+                existing_prepared[
+                    "resumption_date"
+                ] = params[
+                    "resumption_date"
+                ]
+
+                existing_prepared[
+                    "resumption_quote_time"
+                ] = params[
+                    "resumption_quote_time"
+                ]
+
+                existing_prepared[
+                    "resumption_trade_time"
+                ] = params[
+                    "resumption_trade_time"
+                ]
+
+                existing_prepared[
+                    "_resumption_rank"
+                ] = params[
+                    "_resumption_rank"
+                ]
+
+            existing_prepared["pause_threshold_price"] = (
+                prefer_new_value(
+                    existing_prepared[
+                        "pause_threshold_price"
+                    ],
+                    params[
+                        "pause_threshold_price"
+                    ]
+                )
+            )
+
+            existing_prepared[
+                "_has_invalid_resumption"
+            ] = (
+                existing_prepared[
+                    "_has_invalid_resumption"
+                ]
+                or params[
+                    "_has_invalid_resumption"
+                ]
+            )
+
+            existing_prepared[
+                "_has_admissible_resumption"
+            ] = (
+                existing_prepared[
+                    "_has_admissible_resumption"
+                ]
+                or params[
+                    "_has_admissible_resumption"
+                ]
+            )
+
+    for params in prepared_by_key.values():
+
+        params[
+            "_clear_invalid_resumption"
+        ] = (
+            params[
+                "_has_invalid_resumption"
+            ]
+            and not params[
+                "_has_admissible_resumption"
+            ]
         )
+
+    prepared_events = list(
+        prepared_by_key.items()
+    )
 
     # ========================================================
     # 2. LOOKUP BATCH DES NATURAL KEYS EXISTANTES
@@ -847,8 +1041,8 @@ def write_trade_halts(
         for natural_key, _ in prepared_events
     ]
 
-    # 7 colonnes de natural key.
-    # 5 000 × 7 = 35 000 paramètres.
+    # 5 colonnes de natural key.
+    # 5 000 × 5 = 25 000 paramètres.
     LOOKUP_BATCH_SIZE = 5000
 
     with conn.cursor() as cur:
@@ -865,7 +1059,7 @@ def write_trade_halts(
             ]
 
             placeholders = ", ".join(
-                ["(%s, %s, %s, %s, %s, %s, %s)"]
+                ["(%s, %s, %s, %s, %s)"]
                 * len(batch_keys)
             )
 
@@ -897,9 +1091,7 @@ def write_trade_halts(
                     halt_date,
                     halt_time,
                     reason_code,
-                    market,
-                    resumption_date,
-                    resumption_trade_time
+                    market
                 ) IN ({placeholders});
                 """,
                 lookup_params
@@ -928,8 +1120,6 @@ def write_trade_halts(
                     halt_time,
                     reason_code,
                     market,
-                    resumption_date,
-                    resumption_trade_time,
                 )
 
                 existing_by_key[
@@ -1002,34 +1192,44 @@ def write_trade_halts(
             )
         )
 
-        desired_resumption_date = (
-            prefer_new_value(
-                existing["resumption_date"],
-                params["resumption_date"]
-            )
-        )
+        if params[
+            "_clear_invalid_resumption"
+        ]:
 
-        desired_resumption_quote_time = (
-            prefer_new_value(
-                existing[
-                    "resumption_quote_time"
-                ],
-                params[
-                    "resumption_quote_time"
-                ]
-            )
-        )
+            desired_resumption_date = None
+            desired_resumption_quote_time = None
+            desired_resumption_trade_time = None
 
-        desired_resumption_trade_time = (
-            prefer_new_value(
-                existing[
-                    "resumption_trade_time"
-                ],
-                params[
-                    "resumption_trade_time"
-                ]
+        else:
+
+            desired_resumption_date = (
+                prefer_new_value(
+                    existing["resumption_date"],
+                    params["resumption_date"]
+                )
             )
-        )
+
+            desired_resumption_quote_time = (
+                prefer_new_value(
+                    existing[
+                        "resumption_quote_time"
+                    ],
+                    params[
+                        "resumption_quote_time"
+                    ]
+                )
+            )
+
+            desired_resumption_trade_time = (
+                prefer_new_value(
+                    existing[
+                        "resumption_trade_time"
+                    ],
+                    params[
+                        "resumption_trade_time"
+                    ]
+                )
+            )
 
         desired_pause_threshold_price = (
             prefer_new_value(
@@ -1176,9 +1376,7 @@ def write_trade_halts(
                     halt_date,
                     halt_time,
                     reason_code,
-                    market,
-                    resumption_date,
-                    resumption_trade_time;
+                    market;
                 """,
                 insert_params
             )
@@ -1196,8 +1394,6 @@ def write_trade_halts(
                 halt_time,
                 reason_code,
                 market,
-                resumption_date,
-                resumption_trade_time,
             ) = row
 
             natural_key = (
@@ -1206,8 +1402,6 @@ def write_trade_halts(
                 halt_time,
                 reason_code,
                 market,
-                resumption_date,
-                resumption_trade_time,
             )
 
             returned_by_key[
@@ -1282,15 +1476,16 @@ def write_trade_halts(
                 f"""
                 UPDATE raw.nasdaq_trade_halt AS target
                 SET
-                    issue_name = batch.issue_name,
+                    issue_name =
+                        batch.issue_name,
                     resumption_date =
-                        batch.resumption_date,
+                        batch.resumption_date::date,
                     resumption_quote_time =
-                        batch.resumption_quote_time,
+                        batch.resumption_quote_time::time,
                     resumption_trade_time =
-                        batch.resumption_trade_time,
+                        batch.resumption_trade_time::time,
                     pause_threshold_price =
-                        batch.pause_threshold_price
+                        batch.pause_threshold_price::numeric(18,6)
                 FROM (
                     VALUES {value_placeholders}
                 ) AS batch (
@@ -1364,6 +1559,102 @@ def write_trade_halts(
         unchanged,
         raw_ids,
     )
+
+
+# ============================================================
+# ÉCRITURE RESUMPTIONS
+# ============================================================
+
+def write_resumptions(conn, unique_events):
+    """
+    Persiste les observations de reprise Nasdaq dans
+    raw.nasdaq_resumption.
+
+    Une même identité de HALT peut avoir plusieurs observations
+    de resumption.
+    """
+
+    if not unique_events:
+        return (0, 0)
+
+    rows = []
+    seen = set()
+
+    for event in unique_events:
+        halt_start = event.get("halt_start")
+        if halt_start is None:
+            raise ValueError(
+                "Resumption event has no halt_start: "
+                f"{event}"
+            )
+
+        resumption_date = parse_date(event.get("resumption_date"))
+        if resumption_date is None:
+            continue
+
+        symbol = empty_to_none(event.get("symbol"))
+        market = empty_to_none(event.get("market"))
+        reason_code = empty_to_none(event.get("reason_code"))
+
+        if symbol is None or market is None or reason_code is None:
+            raise ValueError(
+                "Incomplete resumption identity: "
+                f"{event}"
+            )
+
+        row = (
+            symbol,
+            market,
+            halt_start.date(),
+            halt_start.time(),
+            reason_code,
+            resumption_date,
+            parse_time(event.get("resumption_quote_time")),
+            parse_time(event.get("resumption_trade_time")),
+            empty_to_none(event.get("source_file")),
+        )
+
+        key = row[:8]
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+
+    if not rows:
+        return (0, 0)
+
+    inserted = 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO raw.nasdaq_resumption (
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time,
+                source_file
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (
+                symbol,
+                market,
+                halt_date,
+                halt_time,
+                reason_code,
+                resumption_date,
+                resumption_quote_time,
+                resumption_trade_time
+            ) DO NOTHING;
+            """,
+            rows,
+        )
+        inserted = cur.rowcount
+
+    return inserted, len(rows) - inserted
 
 
 # ============================================================
@@ -1624,7 +1915,6 @@ def write_halt_episodes(
             SELECT
                 s.symbol,
                 s.market,
-                s.reason_code,
                 s.halt_start,
                 COUNT(ep.id)
             FROM _quantlab_core_episode_stage s
@@ -1635,7 +1925,6 @@ def write_halt_episodes(
             GROUP BY
                 s.symbol,
                 s.market,
-                s.reason_code,
                 s.halt_start
             HAVING COUNT(ep.id) > 1;
             """
@@ -1752,7 +2041,6 @@ def write_halt_episodes(
                 JOIN _quantlab_core_episode_stage s
                   ON s.symbol = ep.symbol
                  AND s.market = ep.market
-                 AND s.reason_code = ep.reason_code
                  AND s.halt_start = ep.halt_start
             )
             UPDATE core.nasdaq_halt_episode ep
@@ -1805,7 +2093,6 @@ def write_halt_episodes(
             JOIN _quantlab_core_episode_stage s
               ON s.symbol = ep.symbol
              AND s.market = ep.market
-             AND s.reason_code = ep.reason_code
              AND s.halt_start = ep.halt_start
             WHERE rel.episode_id = ep.id
               AND NOT EXISTS (
@@ -1895,3 +2182,142 @@ def write_halt_episodes(
         updated,
         unchanged,
     )
+
+
+
+# ============================================================
+# ORCHESTRATION POSTGRESQL
+# ============================================================
+
+def persist_nasdaq_halts(
+    unique_events,
+    episodes
+):
+    """
+    Persiste une exécution Nasdaq complète dans PostgreSQL.
+
+    Ordre transactionnel :
+
+        1. RAW HALT
+        2. RAW RESUMPTION
+        3. CORE EPISODES / RELATIONS
+
+    Toute erreur provoque le rollback de l'ensemble de
+    l'opération.
+    """
+
+    print()
+    print(
+        "============================================================"
+    )
+    print(
+        f"POSTGRESQL PERSISTENCE V{VERSION}"
+    )
+    print(
+        "============================================================"
+    )
+    print()
+
+    with get_connection() as conn:
+
+        # Une seule transaction de persistance Nasdaq peut écrire
+        # simultanément dans PostgreSQL.
+        #
+        # Le verrou est transactionnel :
+        # - acquis avant toute lecture/écriture RAW;
+        # - conservé pendant RAW, RESUMPTION et CORE;
+        # - libéré automatiquement au COMMIT ou au ROLLBACK.
+        #
+        # Ceci élimine les races SELECT -> INSERT entre deux
+        # exécutions concurrentes sans modifier les règles
+        # d'enrichissement ou d'idempotence V1.2.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 1),
+            )
+
+        (
+            raw_inserted,
+            raw_updated,
+            raw_unchanged,
+            raw_ids,
+        ) = write_trade_halts(
+            conn,
+            unique_events
+        )
+
+        (
+            resumption_inserted,
+            resumption_existing,
+        ) = write_resumptions(
+            conn,
+            unique_events
+        )
+
+        (
+            core_inserted,
+            core_updated,
+            core_unchanged,
+        ) = write_halt_episodes(
+            conn,
+            episodes,
+            unique_events,
+            raw_ids
+        )
+
+    print(
+        f"RAW inserted          : {raw_inserted}"
+    )
+    print(
+        f"RAW updated           : {raw_updated}"
+    )
+    print(
+        f"RAW unchanged         : {raw_unchanged}"
+    )
+    print(
+        f"RESUMPTION inserted   : {resumption_inserted}"
+    )
+    print(
+        f"RESUMPTION existing   : {resumption_existing}"
+    )
+    print(
+        f"CORE inserted         : {core_inserted}"
+    )
+    print(
+        f"CORE updated          : {core_updated}"
+    )
+    print(
+        f"CORE unchanged        : {core_unchanged}"
+    )
+
+    print()
+    print(
+        "PostgreSQL persistence completed"
+    )
+
+    return {
+        "raw_inserted":
+            raw_inserted,
+
+        "raw_updated":
+            raw_updated,
+
+        "raw_unchanged":
+            raw_unchanged,
+
+        "resumption_inserted":
+            resumption_inserted,
+
+        "resumption_existing":
+            resumption_existing,
+
+        "core_inserted":
+            core_inserted,
+
+        "core_updated":
+            core_updated,
+
+        "core_unchanged":
+            core_unchanged,
+    }

@@ -2,15 +2,17 @@
 
 ## 1. Purpose
 
-This document defines the reproducible installation procedure for a QuantLab development workstation.
+This document defines the reproducible installation and development procedure for a QuantLab workstation and its current PostgreSQL integration.
 
-The objective is to allow an authorized collaborator to configure a new workstation and obtain a consistent QuantLab development environment.
+The objective is to allow an authorized collaborator to configure a compatible environment and reproduce the current validated QuantLab Nasdaq workflow.
 
 Secrets, passwords, recovery codes, tokens and database credentials must never be recorded in this document.
 
+---
+
 ## 2. Current Reference Environment
 
-Initial reference workstation:
+Reference workstation:
 
 - Operating system: Windows
 - Project root: `C:\QuantLab\QuantLab`
@@ -20,7 +22,15 @@ Initial reference workstation:
 - Python: 3.14.7
 - PostgreSQL client: 17
 - Managed database: Azure Database for PostgreSQL Flexible Server
-- Authentication: individual accounts; GitHub 2FA enabled
+- Authentication: individual accounts
+- GitHub 2FA: enabled
+- Current shell: Windows PowerShell 5.1
+- Repository text standard: UTF-8
+- `.editorconfig`: enabled
+
+PowerShell 7 evaluation is deferred until the current Nasdaq/PostgreSQL checkpoint is fully documented and committed.
+
+---
 
 ## 3. GitHub Account
 
@@ -29,18 +39,16 @@ Each collaborator must use an individual GitHub account.
 Requirements:
 
 - verified email address;
-- Two-Factor Authentication (2FA) enabled;
-- no shared account credentials.
+- Two-Factor Authentication enabled;
+- no shared credentials.
 
-The initial QuantLab repository is configured as private.
+The repository may initially belong to an individual account and later be transferred to a GitHub Organization without changing the application architecture.
 
-The repository may initially be owned by an individual account and transferred later to a GitHub Organization if QuantLab moves to a corporate environment.
+---
 
 ## 4. Git Installation
 
-Git for Windows is installed on the workstation.
-
-Verify with:
+Verify:
 
 ```powershell
 git --version
@@ -52,73 +60,77 @@ Reference validated version:
 git version 2.55.0.windows.5
 ```
 
+---
+
 ## 5. Git Identity
 
-Git identity is configured globally:
+Configure:
 
 ```powershell
 git config --global user.name "<USER NAME>"
 git config --global user.email "<GITHUB NOREPLY EMAIL>"
 ```
 
-The GitHub noreply address is recommended to avoid exposing a collaborator's personal email address in commit metadata.
-
-Verify with:
+Verify:
 
 ```powershell
 git config --global --list
 ```
 
+A GitHub noreply address is recommended when collaborators do not want personal email addresses exposed in commit metadata.
+
+---
+
 ## 6. GitHub CLI
 
-GitHub CLI is used for repository and GitHub Project administration when required.
-
-Verify with:
+Verify:
 
 ```powershell
 gh --version
 ```
 
-If the GitHub CLI binary directory is not yet available in the current PowerShell `PATH`, it can be added temporarily with:
+If required for the current PowerShell session:
 
 ```powershell
 $ghBin = "C:\Program Files\GitHub CLI"
 $env:Path = "$ghBin;$env:Path"
 ```
 
-Authentication can be verified with:
+Verify authentication:
 
 ```powershell
 gh auth status
 ```
 
-Authentication tokens and credentials must never be stored in project documentation.
+Authentication tokens must never be stored in project documentation.
+
+---
 
 ## 7. Local Repository
 
-The QuantLab repository is located under:
+Reference path:
 
 ```text
 C:\QuantLab\QuantLab
 ```
 
-Repository status is verified with:
+Verify:
 
 ```powershell
 git status
 ```
 
-The authoritative branch is currently:
+Reference branch:
 
 ```text
 main
 ```
 
-Normal development changes must be reviewed before staging and committing.
+Normal changes should be reviewed before staging and committing.
+
+---
 
 ## 8. Repository Structure
-
-The QuantLab monorepo currently follows this structure:
 
 ```text
 QuantLab/
@@ -150,298 +162,139 @@ QuantLab/
 +-- README.md
 +-- pyproject.toml
 +-- .gitignore
++-- .editorconfig
 ```
 
-The historical local Nasdaq Halt project remains available at:
+The historical local project may remain temporarily available under:
 
 ```text
 C:\QuantLab\nasdaq_halts
 ```
 
-The migration to the monorepo has been completed and validated.
+as a reference copy until its removal is explicitly approved.
 
-The historical project is retained temporarily as a reference copy. It must not be deleted until its removal is explicitly approved after the PostgreSQL integration and historical-data validation stages.
+---
 
-## 9. Installation Status and Remaining Stages
+## 9. Current Implementation Status
 
-### Completed stages
+Completed major stages include:
 
-1. Configure `.gitignore`.
-2. Create initial repository documentation.
-3. Perform initial Git commits and pushes.
-4. Configure GitHub Projects.
-5. Migrate Nasdaq Halt Collector to the monorepo.
-6. Establish the common Python virtual environment.
-7. Deploy Azure Database for PostgreSQL Flexible Server.
-8. Create the `quantlab` database.
-9. Apply and validate PostgreSQL migration `001`.
-10. Correct and validate halt close status through migration `002`.
-11. Configure least-privilege PostgreSQL application roles.
-12. Install and validate Psycopg 3 connectivity.
-13. Validate PostgreSQL loading against the 744-event baseline.
-14. Validate PostgreSQL idempotence.
-15. Validate fractional-second timestamp preservation.
-16. Configure Visual Studio Code PostgreSQL access.
-17. Establish reusable SQL query storage under `database/queries/`.
-18. Implement Nasdaq-specific PostgreSQL persistence.
-19. Integrate the V0.7 historical processing pipeline directly with PostgreSQL.
-20. Validate direct XML-to-PostgreSQL loading against 744 events.
-21. Validate XML source-file provenance in PostgreSQL.
-22. Validate direct V0.7 persistence idempotence.
+1. Git repository creation and GitHub synchronization.
+2. GitHub Projects configuration.
+3. Nasdaq Halt Collector migration into the monorepo.
+4. Common Python virtual environment.
+5. Azure PostgreSQL DEV deployment.
+6. `quantlab` database creation.
+7. Initial PostgreSQL schema deployment.
+8. Least-privilege application-role configuration.
+9. Psycopg 3 integration.
+10. Historical and live parser unification.
+11. Direct Python-to-PostgreSQL persistence.
+12. CORE-to-RAW relationship table.
+13. RAW and CORE V1.1 migration stages.
+14. Resumption observation table.
+15. Full historical Nasdaq load and analysis.
+16. RAW V1.2 natural-key consolidation.
+17. CORE V1.2 identity stabilization.
+18. `UNIQUE NULLS NOT DISTINCT` resumption fix.
+19. Canonical resumption data-quality policy.
+20. Full-history sequential idempotence validation.
+21. QVCG regression validation.
+22. BCARU historical fixture redesign and validation.
+23. Referential-integrity validation.
+24. PostgreSQL advisory-lock concurrency hardening.
+25. Concurrency test with two independent PostgreSQL connections.
+26. Migration `006_nasdaq_persistence_v1_2.sql` creation and rollback validation.
+27. `.editorconfig` creation for UTF-8 handling.
 
-### Current stage
-
-Complete and document the Nasdaq Halt V0.7 PostgreSQL integration checkpoint.
-
-The historical XML processing path now writes directly to PostgreSQL without using processed CSV files as the integration layer.
-
-The live/current Nasdaq acquisition path must still be reviewed before the broader collector integration task is considered fully complete.
-
-### Remaining stages
-
-1. Review and integrate the live/current Nasdaq acquisition path with the validated PostgreSQL persistence architecture.
-2. Load the five-year Nasdaq halt history.
-3. Validate the five-year dataset and current 1:1 RAW-to-CORE assumption.
-4. Validate Python deduplication versus the PostgreSQL RAW natural key.
-5. Validate timezone semantics.
-6. Model the authoritative market calendar.
-7. Create Nasdaq Halt analytical database objects.
-8. Build the broader database query interface.
-9. Configure automated execution.
-10. Configure on-demand execution.
-11. Configure and validate backup and restore procedures.
-12. Configure the Microsoft collaboration environment.
-13. Add the second collaborator when available.
-14. Prepare TEST and PROD security/infrastructure when required.
-
-## 10. GitHub Projects Configuration
-
-A GitHub Project named `QuantLab` has been created and configured.
-
-Workflow statuses:
+Current technical checkpoint:
 
 ```text
-Backlog
-Ready
-In Progress
-Review / Test
-Done
-Cancelled
+Nasdaq Data Model V1.2
+PostgreSQL Persistence V1.2
 ```
 
-Custom fields include:
+---
 
-```text
-Priority
-Component
-Environment
-Target date
-Owner
-```
+## 10. Python Environment
 
-Standard Priority values:
-
-```text
-Critical
-High
-Medium
-Low
-```
-
-Standard Component values include:
-
-```text
-Infrastructure
-GitHub
-Database
-Collector
-Analytics
-Orchestration
-Documentation
-Collaboration
-Security
-```
-
-Standard Environment values:
-
-```text
-DEV
-TEST
-PROD
-N/A
-```
-
-GitHub Issues are used for implementation work, validation activities and other actionable backlog items.
-
-The current collector work is focused on completing the Nasdaq Halt PostgreSQL integration after validation of the V0.7 historical processing path.
-
-## 11. Migration du collecteur Nasdaq Halts
-
-Le projet historique local :
-
-```text
-C:\QuantLab\nasdaq_halts
-```
-
-a été conservé intact comme copie de référence pendant la migration.
-
-Le collecteur a été migré vers :
-
-```text
-C:\QuantLab\QuantLab\collectors\nasdaq_halts
-```
-
-Les éléments suivants ont été migrés :
-
-- code source Python;
-- configuration non sensible;
-- architecture spécifique du collecteur;
-- spécification des métriques;
-- modèle de données documentaire.
-
-Les éléments suivants ne sont pas ajoutés à Git :
-
-- environnement virtuel `.venv`;
-- données RAW;
-- données processed;
-- logs;
-- secrets.
-
-Les règles `.gitignore` excluent les données et logs locaux des composants QuantLab.
-
-Après migration, le moteur V0.6 a d'abord été exécuté depuis son nouvel emplacement afin d'établir le baseline de non-régression.
-
-Le pipeline a ensuite évolué vers V0.7 avec persistance PostgreSQL directe.
-
-Résultats V0.7 de validation :
-
-```text
-Événements bruts       : 744
-Événements uniques     : 744
-HALT Episodes          : 744
-Tickers différents     : 235
-Lignes quotidiennes    : 322
-Jours de marché        : 10
-Durées calculables     : 742
-```
-
-Statuts de clôture validés :
-
-```text
-YES                    : 15
-NO                     : 697
-UNKNOWN                : 2
-MULTI_DAY              : 30
-TOTAL                  : 744
-```
-
-Tests de non-régression :
-
-```text
-QVCG TEST              : PASS
-BCARU TEST             : PASS
-```
-
-Persistance PostgreSQL après nettoyage de la base DEV :
-
-```text
-RAW inserted           : 744
-RAW existing           : 0
-CORE inserted          : 744
-CORE existing          : 0
-```
-
-Une réexécution contre les mêmes données a validé l'idempotence :
-
-```text
-RAW inserted           : 0
-RAW existing           : 744
-CORE inserted          : 0
-CORE existing          : 744
-```
-
-La provenance `source_file` a également été validée avec les noms réels des fichiers XML historiques.
-
-## 12. Python Environment
-
-A common Python virtual environment is maintained at:
+Reference virtual environment:
 
 ```text
 C:\QuantLab\QuantLab\.venv
 ```
 
-Reference Python version:
+Reference Python:
 
 ```text
 Python 3.14.7
 ```
 
-### Activation
-
-From PowerShell:
+Activate:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-When active, verify the Python executable with:
+Verify:
 
 ```powershell
 where.exe python
+python --version
 ```
 
-The first result should be:
+The first Python path should point to:
 
 ```text
 C:\QuantLab\QuantLab\.venv\Scripts\python.exe
 ```
 
-The `.venv` directory is excluded from Git and must be recreated independently on each development workstation.
+The `.venv` directory is excluded from Git.
 
-### Project dependencies
+---
 
-Python project dependencies are declared in:
+## 11. Project Dependencies
+
+Dependencies are declared in:
 
 ```text
 pyproject.toml
 ```
 
-The current PostgreSQL dependency is:
+Current PostgreSQL dependency:
 
 ```text
 psycopg[binary]>=3.3,<4
 ```
 
-The validated installed Psycopg version in the current DEV environment is:
+Reference validated Psycopg version:
 
 ```text
 3.3.4
 ```
 
-The Nasdaq V0.7 processing pipeline uses Psycopg for PostgreSQL persistence.
+Dependencies should be installed into the repository virtual environment rather than globally.
 
-Dependencies should be installed into the monorepo virtual environment rather than globally.
+---
 
-## 13. PostgreSQL DEV Environment
+## 12. PostgreSQL DEV Environment
 
-The initial QuantLab managed database is hosted using Azure Database for PostgreSQL Flexible Server.
+Reference configuration:
 
-Reference DEV configuration:
+- Azure Database for PostgreSQL Flexible Server
+- Region: Canada Central
+- PostgreSQL: 17
+- Compute tier: Burstable
+- Size: B1ms
+- 1 vCPU
+- 2 GiB memory
+- 32 GiB storage
+- High availability: disabled
+- Backup retention: 7 days
+- Public access restricted by Azure firewall
+- TLS required
 
-- Azure region: Canada Central
-- PostgreSQL version: 17
-- compute tier: Burstable
-- compute size: B1ms
-- vCPU: 1
-- memory: 2 GiB
-- storage: 32 GiB
-- high availability: disabled
-- backup retention: 7 days
-- authentication: PostgreSQL authentication
-- network access: public access restricted by Azure firewall rules
-- transport security: TLS
-
-Server endpoint:
+Endpoint:
 
 ```text
 quantlab-postgres-dev.postgres.database.azure.com
@@ -453,13 +306,13 @@ Port:
 5432
 ```
 
-Primary QuantLab database:
+Database:
 
 ```text
 quantlab
 ```
 
-Current schemas:
+Schemas:
 
 ```text
 raw
@@ -467,38 +320,40 @@ core
 analytics
 ```
 
-## 14. PostgreSQL Client Installation on Windows
+---
 
-PostgreSQL 17 client tools were installed using Windows Package Manager:
+## 13. PostgreSQL Client Installation
+
+Reference client:
+
+```text
+psql 17.11
+```
+
+Example installation:
 
 ```powershell
 winget install --id PostgreSQL.PostgreSQL.17 --exact
 ```
 
-Verify with:
+Verify:
 
 ```powershell
 psql --version
 ```
 
-Reference validated version:
-
-```text
-psql (PostgreSQL) 17.11
-```
-
-If the PostgreSQL binary directory is not yet available in the current PowerShell `PATH`, it can be added temporarily with:
+If required for the current PowerShell session:
 
 ```powershell
 $pgBin = "C:\Program Files\PostgreSQL\17\bin"
 $env:Path = "$pgBin;$env:Path"
 ```
 
-A permanent `PATH` configuration may be performed separately on each workstation.
+---
 
-## 15. Connecting to Azure PostgreSQL
+## 14. Administrative PostgreSQL Connection
 
-Administrative connection example:
+Reference command:
 
 ```powershell
 psql "host=quantlab-postgres-dev.postgres.database.azure.com port=5432 dbname=quantlab user=quantlab_admin sslmode=require"
@@ -506,153 +361,39 @@ psql "host=quantlab-postgres-dev.postgres.database.azure.com port=5432 dbname=qu
 
 The password is entered interactively.
 
-A successful connection must report an SSL/TLS connection.
+The administrator account is reserved for provisioning, migrations, role management and administrative operations.
 
-Passwords and database credentials must never be stored in:
+Normal collector execution must use the application identity.
 
-- Git;
-- GitHub;
-- Markdown documentation;
-- committed configuration files;
-- source code;
-- PowerShell scripts committed to the repository.
+---
 
-The administrator account must not be used by the collector for normal application execution.
+## 15. PostgreSQL Application Security
 
-## 16. Creating the QuantLab Database
-
-During initial provisioning, the administrative connection is made to the default `postgres` database.
-
-The QuantLab database was created with:
-
-```sql
-CREATE DATABASE quantlab;
-```
-
-The session can switch to the QuantLab database with:
-
-```sql
-\c quantlab
-```
-
-This provisioning step is already completed in the current DEV environment.
-
-## 17. Database Migrations
-
-Database migrations are maintained under:
-
-```text
-database/migrations/
-```
-
-### Migration 001
-
-```text
-database/migrations/001_create_nasdaq_halts_schema.sql
-```
-
-It creates:
-
-```text
-raw.nasdaq_trade_halt
-core.nasdaq_halt_episode
-```
-
-along with the required schemas, indexes and integrity constraints.
-
-It was successfully applied and validated against Azure PostgreSQL 17.
-
-### Migration 002
-
-```text
-database/migrations/002_fix_nasdaq_halt_close_status.sql
-```
-
-It replaces the original boolean halt-close representation with:
-
-```text
-halt_close_status VARCHAR(20)
-```
-
-and permits:
-
-```text
-YES
-NO
-UNKNOWN
-MULTI_DAY
-```
-
-Migration `002` was successfully applied and validated in DEV.
-
-### Migration execution
-
-From `psql` connected to `quantlab`:
-
-```sql
-\i 'C:/QuantLab/QuantLab/database/migrations/001_create_nasdaq_halts_schema.sql'
-```
-
-then:
-
-```sql
-\i 'C:/QuantLab/QuantLab/database/migrations/002_fix_nasdaq_halt_close_status.sql'
-```
-
-Migrations must:
-
-1. be versioned in Git;
-2. be reviewed before execution;
-3. be tested in DEV;
-4. be documented;
-5. be executed in numeric order;
-6. not be modified retroactively after they have been applied.
-
-The future Nasdaq Halt analytics migration is currently reserved as:
-
-```text
-003_create_nasdaq_halts_analytics.sql
-```
-
-It must not be implemented until the market-calendar and multi-day semantics have been validated.
-
-## 18. PostgreSQL Application Security
-
-QuantLab uses separate administrative and application identities.
-
-### Application role
-
-The current application role is:
+Application role:
 
 ```text
 quantlab_collector
 ```
 
-It is configured as a `NOLOGIN` role.
+Type:
 
-It contains the privileges required for the collector to access the relevant RAW and CORE objects.
+```text
+NOLOGIN
+```
 
-### DEV login
-
-The current DEV application login is:
+DEV login:
 
 ```text
 quantlab_collector_dev
 ```
 
-It is a member of:
+The DEV login inherits its permissions through membership in the application role.
 
-```text
-quantlab_collector
-```
+---
 
-Application code must use the application identity rather than the PostgreSQL administrator account.
+## 16. PostgreSQL Environment Variables
 
-Passwords are created and entered interactively and must never be added to project documentation or Git.
-
-## 19. PostgreSQL Environment Variables
-
-The shared Python database connection reads:
+The shared Python database layer reads:
 
 ```text
 QUANTLAB_DB_HOST
@@ -662,7 +403,7 @@ QUANTLAB_DB_USER
 QUANTLAB_DB_PASSWORD
 ```
 
-For the current DEV PowerShell session, the non-secret variables can be configured with:
+Example non-secret variables:
 
 ```powershell
 $env:QUANTLAB_DB_HOST = "quantlab-postgres-dev.postgres.database.azure.com"
@@ -671,183 +412,391 @@ $env:QUANTLAB_DB_NAME = "quantlab"
 $env:QUANTLAB_DB_USER = "quantlab_collector_dev"
 ```
 
-The password should be requested securely rather than written literally into shell history:
+Secure interactive password entry:
 
 ```powershell
 $securePassword = Read-Host "PostgreSQL password for quantlab_collector_dev" -AsSecureString
 $env:QUANTLAB_DB_PASSWORD = [System.Net.NetworkCredential]::new("", $securePassword).Password
 ```
 
-Environment variables configured this way are session-local and must be configured again in a new PowerShell session unless a future secrets-management mechanism is introduced.
+These values are session-local.
 
-No production secret-management decision is implied by this DEV procedure.
+No secret should be committed to the repository.
 
-## 20. Shared Python PostgreSQL Connection
+---
 
-Common PostgreSQL connectivity is implemented under:
+## 17. Shared PostgreSQL Connection
+
+Common connectivity is implemented under:
 
 ```text
 shared/database/
 ```
 
-Current files:
+Current files include:
 
 ```text
 shared/database/__init__.py
 shared/database/connection.py
 ```
 
-The connection uses Psycopg 3 with:
+The connection uses Psycopg 3 and TLS.
+
+---
+
+## 18. Database Migrations
+
+Migration directory:
 
 ```text
-sslmode=require
+database/migrations/
 ```
 
-The connection layer reads its configuration from the environment variables defined in the previous section.
+Current files:
 
-Connectivity from the monorepo virtual environment to Azure PostgreSQL using the DEV application account has been successfully validated.
+```text
+001_create_nasdaq_halts_schema.sql
+002_core_episode_event.sql
+002_fix_nasdaq_halt_close_status.sql
+003_update_nasdaq_raw_natural_key_v1_1.sql
+004_update_nasdaq_core_natural_key_v1_1.sql
+005_create_nasdaq_resumption.sql
+006_nasdaq_persistence_v1_2.sql
+```
 
-## 21. Nasdaq PostgreSQL Persistence V0.7
+Two historical migrations use prefix `002`.
 
-Nasdaq-specific PostgreSQL persistence is implemented in:
+This numbering anomaly is documented and the files must not be renamed retroactively.
+
+Future migrations must use a new available number.
+
+### Migration rules
+
+Migrations must:
+
+1. be versioned in Git;
+2. be reviewed;
+3. be tested in DEV;
+4. be documented;
+5. be executed in the appropriate historical order;
+6. not be modified retroactively after application.
+
+### Reference execution
+
+```powershell
+psql "host=quantlab-postgres-dev.postgres.database.azure.com port=5432 dbname=quantlab user=quantlab_admin sslmode=require" `
+    -v ON_ERROR_STOP=1 `
+    -f .\database\migrations\<migration>.sql
+```
+
+---
+
+## 19. Migration 006 — Nasdaq Persistence V1.2
+
+File:
+
+```text
+database/migrations/006_nasdaq_persistence_v1_2.sql
+```
+
+Purpose:
+
+- consolidate RAW duplicates under V1.2 identity;
+- preserve CORE/RAW relationships;
+- apply RAW V1.2 uniqueness;
+- apply CORE V1.2 uniqueness;
+- deduplicate resumption observations;
+- apply `UNIQUE NULLS NOT DISTINCT`;
+- validate referential integrity;
+- serialize with Nasdaq persistence using the same advisory lock.
+
+PostgreSQL requirement:
+
+```text
+PostgreSQL 15+
+```
+
+because `UNIQUE NULLS NOT DISTINCT` is required.
+
+A temporary test copy was executed completely against DEV with the final transaction changed to `ROLLBACK`. All statements and validation blocks completed successfully.
+
+---
+
+## 20. Nasdaq PostgreSQL Persistence V1.2
+
+Module:
 
 ```text
 collectors/nasdaq_halts/src/nasdaq_postgresql.py
 ```
 
-It uses the shared connection layer from:
+Current version marker:
 
 ```text
-shared/database/
+VERSION = "1.2"
 ```
 
 The module persists:
 
 ```text
-unique_events
+canonical HALTs
+-> raw.nasdaq_trade_halt
+
+resumption observations
+-> raw.nasdaq_resumption
+
+business episodes
+-> core.nasdaq_halt_episode
+
+episode/RAW relationships
+-> core.nasdaq_halt_episode_event
 ```
 
-to:
+---
 
-```text
-raw.nasdaq_trade_halt
-```
+## 21. Running the Historical Nasdaq Pipeline
 
-and:
-
-```text
-episodes
-```
-
-to:
-
-```text
-core.nasdaq_halt_episode
-```
-
-The writer implements:
-
-- RAW natural-key conflict handling;
-- idempotent insertion;
-- retrieval of existing RAW identifiers;
-- XML `source_file` provenance;
-- close-status validation;
-- strict RAW-to-CORE relationship validation;
-- transactional persistence.
-
-The current RAW natural key is:
-
-```text
-symbol
-halt_date
-halt_time
-reason_code
-market
-```
-
-The current CORE model assumes:
-
-```text
-1 RAW event -> 1 CORE episode
-```
-
-This assumption is validated on the 744-event V0.7 dataset but must be revalidated against the complete historical dataset.
-
-If the writer cannot associate an episode unambiguously with exactly one RAW event under the current model, execution fails explicitly rather than selecting an arbitrary relationship.
-
-## 22. Running the Nasdaq V0.7 Processing Pipeline
-
-Because the V0.7 processor imports modules from the QuantLab monorepo root, the reference execution is performed from:
+Reference execution is from the monorepo root:
 
 ```text
 C:\QuantLab\QuantLab
 ```
 
-with the monorepo virtual environment active.
+with the virtual environment active.
 
-Reference command:
+Command:
 
 ```powershell
 python -m collectors.nasdaq_halts.src.calculate_halt_metrics
 ```
 
-Direct execution using the Python file path is not the reference invocation.
+The PostgreSQL environment variables must be available in the current shell.
 
-### PostgreSQL requirement
+Network access and Azure firewall authorization are required.
 
-In the current V0.7 implementation, PostgreSQL persistence is invoked directly by the processing pipeline.
+A PostgreSQL error causes the current persistence-enabled execution to fail rather than silently skipping database persistence.
 
-Therefore, before running the command, the following environment variables must exist in the current PowerShell session:
+---
 
-```text
-QUANTLAB_DB_HOST
-QUANTLAB_DB_PORT
-QUANTLAB_DB_NAME
-QUANTLAB_DB_USER
-QUANTLAB_DB_PASSWORD
-```
+## 22. Full Historical Validation
 
-The workstation must also:
-
-- have network access to the PostgreSQL endpoint;
-- be permitted by the Azure firewall;
-- have Psycopg installed in the active virtual environment;
-- use an application account with the required RAW and CORE privileges.
-
-A PostgreSQL connection or persistence error causes the current V0.7 execution to fail rather than silently bypassing database persistence.
-
-This behavior reflects the current implementation and should be reconsidered explicitly if a future offline/non-database processing mode is required.
-
-### Validated execution
-
-A clean direct V0.7 load produced:
+Validated historical period:
 
 ```text
-RAW inserted   : 744
-RAW existing   : 0
-CORE inserted  : 744
-CORE existing  : 0
+2020-01-01 -> 2026-08-28
 ```
 
-A subsequent execution produced:
+Source XML files:
 
 ```text
-RAW inserted   : 0
-RAW existing   : 744
-CORE inserted  : 0
-CORE existing  : 744
+2432
 ```
 
-The non-regression tests remained:
+Observed market days:
 
 ```text
-QVCG TEST : PASS
-BCARU TEST: PASS
+1738
 ```
 
-## 23. Transitional PostgreSQL CSV Loader
+Validated results:
 
-The previous validation loader remains available at:
+```text
+Raw source events        : 69186
+Distinct observations    : 68170
+Canonical RAW HALTs      : 68072
+CORE episodes            : 68017
+Distinct tickers         : 9718
+Daily rows               : 50000
+Calculated durations     : 67983
+```
+
+Close status:
+
+```text
+YES       : 1777
+NO        : 62902
+UNKNOWN   : 34
+```
+
+---
+
+## 23. Reference Idempotence Result
+
+Current reference rerun:
+
+```text
+RAW inserted          : 0
+RAW updated           : 0
+RAW unchanged         : 68072
+
+RESUMPTION inserted   : 0
+RESUMPTION existing   : 68147
+
+CORE inserted         : 0
+CORE updated          : 0
+CORE unchanged        : 68017
+```
+
+Regression tests:
+
+```text
+QVCG TEST  : PASS
+BCARU TEST : PASS
+```
+
+Any future change to Nasdaq persistence should preserve or intentionally update this checkpoint.
+
+---
+
+## 24. CORE V1.2 Identity
+
+CORE natural key:
+
+```text
+symbol
+market
+halt_start
+```
+
+`reason_code` is descriptive and not part of CORE identity.
+
+The explicit relationship table supports:
+
+```text
+1 CORE episode -> N RAW events
+```
+
+This replaces the earlier provisional 1:1 assumption.
+
+---
+
+## 25. RAW V1.2 Identity
+
+Canonical RAW natural key:
+
+```text
+symbol
+market
+halt_date
+halt_time
+reason_code
+```
+
+Multiple distinct source observations may map to one RAW HALT.
+
+This is expected behavior.
+
+---
+
+## 26. Resumption Observation Identity
+
+Observation identity:
+
+```text
+symbol
+market
+halt_date
+halt_time
+reason_code
+resumption_date
+resumption_quote_time
+resumption_trade_time
+```
+
+PostgreSQL uniqueness uses:
+
+```sql
+UNIQUE NULLS NOT DISTINCT
+```
+
+This is required for correct idempotence when quote or trade resumption times are NULL.
+
+---
+
+## 27. Canonical Resumption Policy
+
+Canonical RAW resumption selection distinguishes:
+
+```text
+complete valid
+partial admissible
+invalid / unusable
+```
+
+For multiple valid complete observations, the latest valid `halt_end` is selected.
+
+Resumption fields are selected atomically from one observation.
+
+Invalid source observations remain preserved in `raw.nasdaq_resumption`.
+
+If every available resumption is invalid, the canonical RAW resumption fields are NULL.
+
+---
+
+## 28. Concurrency Control
+
+The Nasdaq persistence transaction acquires:
+
+```sql
+pg_advisory_xact_lock(716203, 1)
+```
+
+Migration 006 acquires the same lock.
+
+The lock is held until `COMMIT` or `ROLLBACK`.
+
+A two-connection test validated blocking behavior:
+
+```text
+holder: lock acquired
+holder: transaction completed
+waiter: lock acquired after 5.03 seconds
+waiter: transaction completed
+```
+
+This protects cooperating Nasdaq processes from lookup/insert races across the whole persistence transaction.
+
+---
+
+## 29. Referential Integrity Validation
+
+Current validated checks:
+
+```text
+broken CORE -> RAW refs         : 0
+broken relation -> CORE refs    : 0
+broken relation -> RAW refs     : 0
+duplicate relationship pairs    : 0
+```
+
+These checks should remain part of future validation after schema or persistence changes.
+
+---
+
+## 30. BCARU Regression Fixture
+
+BCARU uses a historical fixture through:
+
+```text
+2026-08-27
+```
+
+The fixture validates:
+
+```text
+21 CORE episodes
+13 dates
+```
+
+and separately validates the 2026-08-03 close status.
+
+This fixture is intentionally fixed so future source dates do not invalidate the historical regression test.
+
+---
+
+## 31. Transitional CSV Loader
+
+Legacy loader:
 
 ```text
 collectors/nasdaq_halts/src/load_postgresql.py
@@ -859,133 +808,139 @@ Reference invocation:
 python -m collectors.nasdaq_halts.src.load_postgresql
 ```
 
-It reads:
+It is retained as a migration/validation utility.
 
-```text
-collectors/nasdaq_halts/data/processed/tradehalts.csv
-collectors/nasdaq_halts/data/processed/halt_episodes.csv
-```
+It is not the production integration path.
 
-and writes to:
+---
 
-```text
-raw.nasdaq_trade_halt
-core.nasdaq_halt_episode
-```
+## 32. SQL Query Tools
 
-This loader was used to validate the initial PostgreSQL foundation against the known processed dataset.
-
-It is retained as a validation and migration utility.
-
-It is not the preferred V0.7 integration path.
-
-The current direct processing path is:
-
-```text
-XML RAW
-        |
-        v
-Python parsing / normalization
-        |
-        v
-PostgreSQL RAW
-        |
-        v
-PostgreSQL CORE
-```
-
-Processed CSV files remain useful for diagnostics, exports and non-regression testing.
-
-## 24. Visual Studio Code PostgreSQL Tools
-
-The Microsoft PostgreSQL extension is installed in Visual Studio Code for DEV database exploration.
-
-The DEV connection is configured against:
-
-```text
-quantlab-postgres-dev.postgres.database.azure.com
-```
-
-and database:
-
-```text
-quantlab
-```
-
-The extension can be used to:
-
-- browse PostgreSQL schemas and tables;
-- inspect table data;
-- execute SQL;
-- display result grids;
-- execute reusable `.sql` files.
-
-Reusable SQL files are stored under:
+Reusable SQL is stored under:
 
 ```text
 database/queries/
 ```
 
-Current Nasdaq Halt queries are stored under:
+Nasdaq-specific queries:
 
 ```text
 database/queries/nasdaq_halts/
 ```
 
-including:
+These files are used for exploration, validation, integrity checks, diagnostics and provenance queries.
+
+Visual Studio Code with the PostgreSQL extension remains a supported DEV query tool.
+
+---
+
+## 33. UTF-8 and PowerShell 5.1
+
+The repository includes:
 
 ```text
-explore_halt_episodes.sql
-get_halts_per_symbol_and_date.sql
-visualize_halts_table.sql
+.editorconfig
 ```
 
-If a saved SQL file is connected correctly but query execution incorrectly targets an `Untitled` editor, reload the Visual Studio Code window using:
+Current settings include:
 
 ```text
-Developer: Reload Window
+charset = utf-8
 ```
 
-then reopen the saved SQL file and reconnect it if necessary.
-
-## 25. UTF-8 PowerShell Display
-
-QuantLab documentation and source files should be maintained in UTF-8.
-
-If UTF-8 text is displayed incorrectly in a PowerShell terminal, configure the current terminal session with:
+PowerShell 5.1 can write a UTF-8 BOM when using:
 
 ```powershell
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+Set-Content -Encoding utf8
 ```
 
-Markdown files can be explicitly read as UTF-8 with:
+This previously caused a SQL migration test to fail because `psql` interpreted the BOM as text.
+
+For files requiring UTF-8 without BOM, use:
 
 ```powershell
-Get-Content .\docs\installation.md -Raw -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+[System.IO.File]::WriteAllText(
+    $path,
+    $content,
+    $utf8NoBom
+)
 ```
 
-This affects terminal interpretation/display and does not by itself indicate that the underlying file is corrupted.
+PowerShell 7 can be evaluated later as the preferred shell once the current PostgreSQL checkpoint is committed.
 
-## 26. Next Implementation Stage
+---
 
-The V0.7 historical processing path now performs direct PostgreSQL persistence and has been validated against the 744-event baseline.
+## 34. `.editorconfig`
 
-The immediate next technical checkpoint is to review the live/current Nasdaq acquisition path and determine how it should use the same persistence architecture.
+Repository file:
 
-After that integration is validated, the next major data stage is the five-year historical load.
+```text
+.editorconfig
+```
 
-The five-year validation must specifically test:
+Reference content includes:
 
-- RAW natural-key uniqueness;
-- Python versus PostgreSQL deduplication semantics;
-- RAW-to-CORE cardinality;
-- overlapping/merged episodes;
-- source-file provenance;
-- timestamp precision;
-- timezone semantics;
-- multi-day behavior;
-- market-calendar semantics;
-- full-volume idempotence.
+```text
+root = true
 
-The historical dataset must not be considered certified until these checks have been completed.
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+```
+
+SQL and Python files are explicitly covered by UTF-8 rules.
+
+---
+
+## 35. Current Remaining Stages
+
+Major remaining work after the V1.2 persistence checkpoint:
+
+1. Update all remaining project and collector documentation.
+2. Apply/record the final V1.2 migration state consistently in DEV if required by the chosen migration-tracking procedure.
+3. Re-run the full idempotence checkpoint after any final database migration execution.
+4. Review Git status and commit the V1.2 checkpoint.
+5. Push the validated checkpoint.
+6. Model the official market calendar.
+7. Build PostgreSQL analytics.
+8. Define backup and restore procedures.
+9. Implement centralized scheduled execution.
+10. Implement controlled on-demand execution.
+11. Prepare TEST and PROD when required.
+12. Define production secrets management.
+13. Formalize Nasdaq timezone semantics.
+14. Evaluate PowerShell 7 for the standard Windows development shell.
+
+---
+
+## 36. Current Checkpoint
+
+Current validated state:
+
+```text
+Data Model V1.2
+PostgreSQL Persistence V1.2
+```
+
+Validation status:
+
+```text
+Full historical processing          : PASS
+RAW V1.2 identity                    : PASS
+Resumption observation model         : PASS
+CORE V1.2 identity                   : PASS
+CORE -> RAW relationships            : PASS
+Canonical resumption policy          : PASS
+Invalid source observation retention : PASS
+Sequential idempotence               : PASS
+Referential integrity                : PASS
+Concurrency advisory lock            : PASS
+Migration 006 rollback validation    : PASS
+QVCG regression                      : PASS
+BCARU historical fixture             : PASS
+Fractional timestamps                : PASS
+```

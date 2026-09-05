@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 import csv
 
 from datetime import datetime, date, time, timedelta
@@ -867,7 +867,12 @@ with REASON_METRICS_FILE.open(
         symbol,
         reason
     ), reason_episodes in sorted(
-        reason_data.items()
+        reason_data.items(),
+        key=lambda item: (
+            item[0][0] or "",
+            item[0][1] is None,
+            item[0][1] or "",
+        )
     ):
 
         durations = [
@@ -1059,118 +1064,152 @@ else:
 # ============================================================
 # 11. TEST DE NON-RÉGRESSION - BCARU
 # ============================================================
+#
+# Fixture historique figée jusqu'au 2026-08-27.
+#
+# Le test valide le nombre d'épisodes CORE par journée connue.
+# Les nouvelles journées BCARU postérieures au 2026-08-27
+# n'affectent donc pas cette fixture historique.
+#
+# CORE V1.2 :
+# identité épisode = (symbol, market, halt_start)
+# reason_code ne fait pas partie de l'identité.
+# ============================================================
 
 print()
-
 print("============================================================")
 print("TEST DE NON-RÉGRESSION - BCARU")
 print("============================================================")
 
 
-bcaru_episodes = [
-
-    e
-
-    for e in episodes
-
-    if e["symbol"] == "BCARU"
-]
-
-
-bcaru_daily = [
-
-    r
-
-    for r in daily_rows
-
-    if r["symbol"] == "BCARU"
-]
+expected_bcaru_by_date = {
+    "2026-01-12": 1,
+    "2026-07-28": 1,
+    "2026-07-29": 2,
+    "2026-07-30": 1,
+    "2026-07-31": 1,
+    "2026-08-03": 1,
+    "2026-08-07": 2,
+    "2026-08-10": 7,
+    "2026-08-11": 1,
+    "2026-08-14": 1,
+    "2026-08-21": 1,
+    "2026-08-25": 1,
+    "2026-08-27": 1,
+}
 
 
-bcaru_metrics = [
+bcaru_episodes_by_date = {}
 
+for episode in episodes:
+
+    if episode["symbol"] != "BCARU":
+        continue
+
+    episode_date = episode["halt_start"].strftime(
+        "%Y-%m-%d"
+    )
+
+    if episode_date not in expected_bcaru_by_date:
+        continue
+
+    bcaru_episodes_by_date.setdefault(
+        episode_date,
+        []
+    ).append(episode)
+
+
+bcaru_test_passed = True
+
+
+for (
+    expected_date,
+    expected_count
+) in expected_bcaru_by_date.items():
+
+    actual_count = len(
+        bcaru_episodes_by_date.get(
+            expected_date,
+            []
+        )
+    )
+
+    status = (
+        "PASS"
+        if actual_count == expected_count
+        else "FAIL"
+    )
+
+    print(
+        f"BCARU {expected_date} épisodes : "
+        f"{actual_count} "
+        f"(attendu {expected_count}) "
+        f"{status}"
+    )
+
+    if actual_count != expected_count:
+        bcaru_test_passed = False
+
+
+expected_total_episodes = sum(
+    expected_bcaru_by_date.values()
+)
+
+actual_total_episodes = sum(
+    len(episode_list)
+    for episode_list
+    in bcaru_episodes_by_date.values()
+)
+
+
+print()
+print(
+    f"BCARU fixture épisodes : "
+    f"{actual_total_episodes} "
+    f"(attendu {expected_total_episodes})"
+)
+
+print(
+    f"BCARU fixture jours    : "
+    f"{len(bcaru_episodes_by_date)} "
+    f"(attendu {len(expected_bcaru_by_date)})"
+)
+
+
+bcaru_daily_20260803 = [
     row
-
-    for row in ticker_metrics
-
-    if row[0] == "BCARU"
+    for row in daily_rows
+    if row["symbol"] == "BCARU"
+    and str(row["date"]) == "2026-08-03"
 ]
 
 
-expected_bcaru_episodes = 12
-expected_bcaru_halt_days = 5
-expected_bcaru_close_days = 1
-
-
-bcaru_test_passed = (
-
-    len(bcaru_episodes)
-    == expected_bcaru_episodes
-
+bcaru_close_test_passed = (
+    len(bcaru_daily_20260803) == 1
     and
-
-    len(bcaru_daily)
-    == expected_bcaru_halt_days
-
-    and
-
-    sum(
-        1
-        for r in bcaru_daily
-        if r["halt_at_close"] == "YES"
-    )
-    == expected_bcaru_close_days
+    bcaru_daily_20260803[0]["halt_at_close"]
+    == "YES"
 )
 
 
 print(
-    f"BCARU épisodes       : "
-    f"{len(bcaru_episodes)} "
-    f"(attendu {expected_bcaru_episodes})"
-)
-
-print(
-    f"BCARU jours HALT     : "
-    f"{len(bcaru_daily)} "
-    f"(attendu {expected_bcaru_halt_days})"
-)
-
-print(
-    f"BCARU jours clôture  : "
-    f"{sum(1 for r in bcaru_daily if r['halt_at_close'] == 'YES')} "
-    f"(attendu {expected_bcaru_close_days})"
+    f"BCARU 2026-08-03 clôture : "
+    f"{bcaru_daily_20260803[0]['halt_at_close'] if bcaru_daily_20260803 else 'MISSING'} "
+    f"(attendu YES)"
 )
 
 
-if bcaru_metrics:
+if not bcaru_close_test_passed:
+    bcaru_test_passed = False
 
-    b = bcaru_metrics[0]
 
-    print(
-        f"BCARU halts/jour HALT : {b[5]}"
-    )
-
-    print(
-        f"BCARU halts/jour marché : {b[6]}"
-    )
-
-    print(
-        f"BCARU durée médiane   : {b[8]}"
-    )
-
+print()
 
 if bcaru_test_passed:
-
-    print()
     print("BCARU TEST : PASS")
-
 else:
-
-    print()
     print("BCARU TEST : FAIL")
 
-
-# ============================================================
 # 12. VALIDATION FINALE
 # ============================================================
 

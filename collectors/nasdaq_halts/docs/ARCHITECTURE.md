@@ -2,9 +2,9 @@
 
 ## ARCHITECTURE.md
 
-**Version : V1.1**  
+**Version : V1.2**
 **Statut : Architecture de référence du collecteur Nasdaq Halts**  
-**Dernière mise à jour : 2026-09-04**
+**Dernière mise à jour : 2026-09-05**
 
 ---
 
@@ -21,17 +21,29 @@ L’architecture générale de la plateforme est documentée dans :
 Le composant Nasdaq Halts assure actuellement :
 
 - la collecte historique et live des Nasdaq Trading Halts;
-- la conservation des fichiers XML RAW;
+- la conservation des fichiers XML RAW immuables;
 - la collecte historique robuste et reprenable par plage de dates;
 - le parsing et la normalisation;
-- la déduplication;
+- la déduplication des observations Nasdaq;
 - la construction des épisodes HALT;
-- la persistance PostgreSQL RAW et CORE;
-- la production de datasets CSV de validation;
+- la persistance PostgreSQL des HALTs RAW canoniques;
+- la conservation PostgreSQL des observations de reprise;
+- la persistance des épisodes CORE;
+- la conservation des relations CORE → RAW;
+- la sélection d’une reprise canonique selon des règles de qualité explicites;
+- la production de datasets CSV dérivés;
 - le calcul des métriques;
-- les tests de non-régression et d’intégration.
+- les tests de non-régression, d’intégrité, d’idempotence et de concurrence.
 
-L’état V1.1 correspond à la première validation du modèle CORE permettant à un épisode de regrouper plusieurs événements RAW.
+La V1.2 stabilise la distinction entre :
+
+```text
+observation Nasdaq
+HALT RAW canonique
+épisode CORE
+```
+
+et remplace les hypothèses provisoires V1.1 qui ne tenaient pas compte de toutes les observations de reprise et de la sémantique finale de l’identité CORE.
 
 ---
 
@@ -72,7 +84,7 @@ Les données RAW, processed et logs sont locales et exclues de Git.
 
 ---
 
-## 3. Architecture logique
+## 3. Architecture logique V1.2
 
 ### 3.1 Historique
 
@@ -91,17 +103,23 @@ nasdaq_xml.py
 nasdaq_deduplication.py
      |
      v
-unique_events
+Distinct Nasdaq Observations
      |
-     +----> PostgreSQL RAW
+     +------------------------------+
+     |                              |
+     v                              v
+Canonical RAW HALT             RAW Resumption Observations
+raw.nasdaq_trade_halt          raw.nasdaq_resumption
      |
      v
 nasdaq_episodes.py
      |
      v
-CORE episodes
+CORE Episodes
+core.nasdaq_halt_episode
      |
-     +----> PostgreSQL CORE
+     v
+core.nasdaq_halt_episode_event
      |
      +----> CSV derived datasets
 ```
@@ -126,23 +144,28 @@ nasdaq_xml.py
 nasdaq_deduplication.py
     |
     v
-unique_events
+Distinct Nasdaq Observations
     |
-    +----> PostgreSQL RAW
+    +------------------------------+
+    |                              |
+    v                              v
+Canonical RAW HALT             RAW Resumption Observations
+raw.nasdaq_trade_halt          raw.nasdaq_resumption
     |
     v
 nasdaq_episodes.py
     |
     v
-CORE episodes
+CORE Episodes
     |
     +----> PostgreSQL CORE
     |
-    v
-live_tradehalts.csv
+    +----> live_tradehalts.csv
 ```
 
-PostgreSQL ne dépend pas des CSV processed. Les CSV sont des sorties dérivées destinées notamment à la validation, au diagnostic et à l’export.
+PostgreSQL ne dépend pas des CSV processed.
+
+Les CSV sont des sorties dérivées destinées notamment à la validation, au diagnostic, à la comparaison et à l’export.
 
 ---
 
@@ -175,7 +198,7 @@ python -m collectors.nasdaq_halts.src.nasdaq_historical_collector `
   --end-date YYYY-MM-DD
 ```
 
-Valeurs par défaut :
+Valeurs de référence :
 
 ```text
 delay-seconds       : 5
@@ -187,9 +210,9 @@ Un RSS XML valide contenant zéro HALT est considéré comme une acquisition val
 
 ---
 
-## 5. RAW et provenance
+## 5. RAW XML et provenance
 
-Les XML historiques et les snapshots live horodatés sont les artefacts RAW de provenance.
+Les XML historiques et les snapshots live horodatés sont les artefacts RAW immuables de provenance.
 
 Historique :
 
@@ -213,9 +236,23 @@ est une copie pratique du dernier flux et n’est pas la provenance immuable.
 
 Les XML RAW ne doivent pas être modifiés manuellement.
 
-Dans PostgreSQL, `raw.nasdaq_trade_halt.source_file` conserve actuellement le premier snapshot ayant créé l’événement structuré.
+Dans PostgreSQL :
 
-Le modèle N snapshots → 1 événement RAW n’est pas encore matérialisé par une table de provenance distincte.
+```text
+raw.nasdaq_trade_halt
+```
+
+représente le HALT structuré canonique.
+
+La table :
+
+```text
+raw.nasdaq_resumption
+```
+
+conserve les observations de reprise distinctes et leur `source_file` lorsque disponible.
+
+La provenance XML complète demeure reconstruisible depuis les fichiers RAW immuables.
 
 ---
 
@@ -237,9 +274,17 @@ Responsabilités :
 - préservation des fractions de seconde;
 - support des différences `Mkt` / `Market`.
 
+Les timestamps fractionnaires sont préservés à travers :
+
+```text
+Nasdaq XML
+-> Python
+-> PostgreSQL
+```
+
 ---
 
-## 7. Déduplication
+## 7. Déduplication des observations
 
 Module :
 
@@ -247,7 +292,7 @@ Module :
 src/nasdaq_deduplication.py
 ```
 
-Clé logique Python actuelle :
+Clé logique Python des observations :
 
 ```text
 symbol
@@ -257,30 +302,152 @@ resumption_trade_time
 reason_code
 ```
 
-Clé naturelle PostgreSQL RAW :
+Cette identité sert à distinguer les observations Nasdaq.
+
+Elle n’est volontairement pas identique à la clé naturelle du HALT RAW canonique.
+
+### Clé naturelle RAW V1.2
 
 ```text
 symbol
+market
 halt_date
 halt_time
 reason_code
-market
 ```
 
-Clé naturelle PostgreSQL CORE V1.1 :
+### Clé naturelle CORE V1.2
 
 ```text
 symbol
 market
-reason_code
 halt_start
 ```
 
-Les deux niveaux de clé ne sont donc pas identiques et doivent rester explicitement documentés.
+`reason_code` est descriptif au niveau CORE et ne participe plus à l’identité de l’épisode.
+
+Le pipeline distingue donc explicitement :
+
+```text
+unique_events
+        |
+        +----> observations de reprise
+        |
+        v
+agrégation par clé RAW
+        |
+        v
+HALT RAW canonique
+```
+
+Cette distinction évite de perdre des observations partielles ou complètes différentes pour un même HALT.
 
 ---
 
-## 8. Construction des épisodes
+## 8. Modèle PostgreSQL V1.2
+
+Objets principaux :
+
+```text
+raw.nasdaq_trade_halt
+raw.nasdaq_resumption
+core.nasdaq_halt_episode
+core.nasdaq_halt_episode_event
+```
+
+### 8.1 HALT RAW canonique
+
+`raw.nasdaq_trade_halt` contient une ligne par clé :
+
+```text
+symbol
+market
+halt_date
+halt_time
+reason_code
+```
+
+Contrainte :
+
+```text
+uq_nasdaq_trade_halt_natural_key
+```
+
+Le modèle est :
+
+```text
+N observations Nasdaq -> 1 HALT RAW canonique
+```
+
+### 8.2 Observations de reprise
+
+`raw.nasdaq_resumption` conserve les observations distinctes ayant une `resumption_date`.
+
+Identité :
+
+```text
+symbol
+market
+halt_date
+halt_time
+reason_code
+resumption_date
+resumption_quote_time
+resumption_trade_time
+```
+
+Contrainte :
+
+```text
+uq_nasdaq_resumption_observation
+```
+
+La contrainte utilise :
+
+```sql
+UNIQUE NULLS NOT DISTINCT
+```
+
+afin que les observations contenant des heures de reprise `NULL` restent idempotentes.
+
+### 8.3 Épisode CORE
+
+`core.nasdaq_halt_episode` représente l’épisode métier.
+
+Identité V1.2 :
+
+```text
+symbol
+market
+halt_start
+```
+
+Contrainte :
+
+```text
+uq_nasdaq_halt_episode_natural_key
+```
+
+### 8.4 Relation CORE → RAW
+
+`core.nasdaq_halt_episode_event` représente :
+
+```text
+1 CORE episode -> N RAW events
+```
+
+La paire :
+
+```text
+episode_id
+trade_halt_id
+```
+
+est unique.
+
+---
+
+## 9. Construction des épisodes
 
 Module :
 
@@ -290,9 +457,9 @@ src/nasdaq_episodes.py
 
 La construction des épisodes :
 
-- regroupe les événements par symbole;
+- regroupe les événements selon la logique métier validée;
 - trie chronologiquement;
-- fusionne les périodes selon la logique validée;
+- fusionne les périodes lorsque requis;
 - calcule `halt_start`;
 - calcule `halt_end`;
 - calcule `duration_minutes`;
@@ -307,37 +474,58 @@ UNKNOWN
 MULTI_DAY
 ```
 
-Les identifiants `H00000001`, etc., sont des identifiants de calcul et non des identités métier durables.
-
-### Cardinalité V1.1
-
-La validation historique complète montre :
+Les identifiants tels que :
 
 ```text
-RAW events uniques : 68 170
-CORE episodes      : 68 035
-CORE -> RAW        : 68 170 relations
-CORE avec >1 RAW   : 90
-RAW avec >1 CORE   : 0
+H00000001
 ```
 
-Le modèle correct est donc :
+sont des identifiants de calcul et non des identités métier durables.
 
-```text
-1 CORE episode -> N RAW events
-```
-
-avec, sur le dataset validé :
-
-```text
-1 RAW event -> 1 CORE episode
-```
-
-Cette dernière propriété est protégée par validation applicative et non par une contrainte UNIQUE sur `core.nasdaq_halt_episode.trade_halt_id`.
+La persistance CORE utilise l’identité naturelle V1.2 plutôt que `collector_episode_id`.
 
 ---
 
-## 9. Persistance PostgreSQL V1.1
+## 10. Sémantique CORE V1.2
+
+Un CORE episode représente un épisode métier identifié par :
+
+```text
+symbol
+market
+halt_start
+```
+
+`reason_code` est un attribut descriptif.
+
+Plusieurs observations ou événements RAW peuvent contribuer au même épisode.
+
+Le cas BCARU du 12 janvier 2026 a confirmé qu’un même `halt_start` peut être observé avec :
+
+```text
+T1
+T2
+T3
+```
+
+Ces codes ne doivent donc pas créer trois identités CORE distinctes.
+
+La relation complète est reconstruite dans :
+
+```text
+core.nasdaq_halt_episode_event
+```
+
+Le writer valide notamment :
+
+- qu’un épisode possède des RAW associés;
+- que les relations référencent des objets existants;
+- qu’une paire épisode/RAW n’est pas dupliquée;
+- que la relation persistée correspond aux groupes calculés.
+
+---
+
+## 11. Persistance PostgreSQL V1.2
 
 Module :
 
@@ -345,100 +533,116 @@ Module :
 src/nasdaq_postgresql.py
 ```
 
-Le chemin de production est :
+Version :
+
+```text
+VERSION = "1.2"
+```
+
+Chemin de production :
 
 ```text
 XML
- -> parsing
- -> déduplication
- -> épisodes
- -> PostgreSQL RAW
- -> PostgreSQL CORE
+ -> parsing / normalisation
+ -> déduplication des observations
+ -> canonicalisation RAW
+ -> observations RESUMPTION
+ -> construction CORE
+ -> PostgreSQL
 ```
 
-La persistance RAW + CORE + relations CORE→RAW est exécutée dans une transaction commune.
+La persistance complète est exécutée dans une transaction commune.
 
-La V1.1 utilise une stratégie batch pour les opérations CORE :
+Compteurs produits :
 
-- staging temporaire;
-- INSERT massif;
-- UPDATE massif;
-- suppression des relations obsolètes;
-- insertion des relations manquantes;
-- validation relationnelle.
+```text
+RAW inserted
+RAW updated
+RAW unchanged
 
-Les opérations réelles sur les tables CORE ne sont pas effectuées individuellement par épisode.
+RESUMPTION inserted
+RESUMPTION existing
+
+CORE inserted
+CORE updated
+CORE unchanged
+```
 
 ---
 
-## 10. Clé naturelle CORE V1.1
+## 12. Canonicalisation RAW
 
-La clé naturelle est :
+Plusieurs observations Python peuvent partager la même clé RAW V1.2.
 
-```text
-symbol
-market
-reason_code
-halt_start
-```
+Le writer les agrège avant persistance.
 
-Migration :
+Les champs de reprise canoniques sont sélectionnés à partir d’une seule observation et ne sont jamais recombinés artificiellement entre plusieurs observations.
 
-```text
-database/migrations/004_update_nasdaq_core_natural_key_v1_1.sql
-```
+### Rang 2 — reprise complète valide
 
-Cette clé est nécessaire notamment parce que les tests historiques ont identifié :
+Une observation est complète et valide lorsque le `halt_end` calculé respecte :
 
 ```text
-CANF / 2026-03-04 09:38:41
-CVM  / 2020-02-26 15:02:49
+halt_end >= halt_start
 ```
 
-avec plusieurs événements différenciés par `reason_code`.
+### Rang 1 — reprise partielle admissible
 
-La clé `symbol + halt_start` seule est donc insuffisante.
+L’observation contient une information de reprise utile sans permettre encore une reprise complète.
+
+### Rang 0 — reprise non exploitable ou invalide
+
+Inclut notamment :
+
+- aucune information de reprise exploitable;
+- reprise temporellement impossible;
+- `halt_end < halt_start`.
+
+Lorsqu’il existe plusieurs observations complètes valides, la reprise valide la plus tardive est choisie de manière déterministe.
 
 ---
 
-## 11. Sémantique CORE V1.1
+## 13. Préservation des observations invalides
 
-Un CORE episode représente une période continue de HALT.
+Une observation de reprise invalide ne doit pas contaminer le HALT RAW canonique.
 
-Plusieurs événements RAW peuvent appartenir au même épisode lorsque la logique de construction les fusionne.
+Elle n’est toutefois pas supprimée de la provenance structurée.
 
-Les relations sont stockées dans :
-
-```text
-core.nasdaq_halt_episode_event
-```
-
-Le modèle est :
+Elle demeure dans :
 
 ```text
-core.nasdaq_halt_episode
-        |
-        +---- raw event
-        +---- raw event
-        +---- raw event
+raw.nasdaq_resumption
 ```
 
-La relation est reconstruite à chaque persistance à partir des groupes d’événements produits par la même logique de regroupement que `nasdaq_episodes.py`.
+Lorsque toutes les observations de reprise d’une clé RAW sont invalides :
 
-Le writer refuse :
+```text
+raw.nasdaq_trade_halt.resumption_date
+raw.nasdaq_trade_halt.resumption_quote_time
+raw.nasdaq_trade_halt.resumption_trade_time
+```
 
-- un épisode sans RAW;
-- un RAW affecté à plusieurs CORE;
-- une divergence entre les groupes Python et les épisodes produits;
-- une relation manquante après persistance.
+restent `NULL`.
+
+Cinq cas historiques entièrement invalides ont été validés :
+
+```text
+NCNA
+QFTA.W
+TPC
+PBR.A
+LSEAW
+```
+
+Leur représentation canonique RAW ne contient aucune reprise invalide, tandis que leurs observations sources demeurent conservées.
 
 ---
 
-## 12. Mise à jour RAW
+## 14. Mise à jour RAW
 
-Une observation ultérieure du même événement naturel peut enrichir la ligne RAW.
+Une observation ultérieure du même HALT naturel peut enrichir la ligne RAW.
 
-Règles :
+Règles générales :
 
 ```text
 DB NULL + incoming NULL
@@ -457,11 +661,13 @@ DB value A + incoming B
 -> update avec B
 ```
 
-`source_file` conserve le premier snapshot ayant créé la ligne.
+Les règles de reprise canonique ont priorité sur une simple logique champ-par-champ afin d’éviter de mélanger plusieurs observations.
+
+`source_file` est préservé selon la politique de provenance du writer.
 
 ---
 
-## 13. Mise à jour CORE
+## 15. Mise à jour CORE
 
 Les champs CORE enrichissables comprennent notamment :
 
@@ -474,7 +680,7 @@ duration_minutes
 halt_close_status
 ```
 
-Les valeurs NULL entrantes n’effacent pas les valeurs connues.
+Les valeurs `NULL` entrantes n’effacent pas les valeurs connues.
 
 Pour `halt_close_status` :
 
@@ -490,21 +696,25 @@ NO
 MULTI_DAY
 ```
 
-Une nouvelle valeur finale non-UNKNOWN peut corriger une valeur finale existante.
+Une nouvelle valeur finale non-`UNKNOWN` peut corriger une valeur finale existante.
 
 `collector_episode_id` est conservé après insertion initiale.
 
 ---
 
-## 14. Transaction
+## 16. Transaction et concurrence
 
 La persistance est atomique :
 
 ```text
 BEGIN
-  RAW
-  CORE
-  CORE -> RAW relationships
+  |
+  +-- PostgreSQL advisory lock
+  +-- RAW HALT
+  +-- RESUMPTION observations
+  +-- CORE episodes
+  +-- CORE -> RAW relationships
+  |
 COMMIT
 ```
 
@@ -514,11 +724,86 @@ Toute erreur provoque :
 ROLLBACK
 ```
 
-Le test historique V1.1 en mode dry-run confirme le rollback complet.
+### Verrou Nasdaq QuantLab
+
+Avant toute lecture ou écriture de persistance Nasdaq, le writer acquiert :
+
+```sql
+pg_advisory_xact_lock(716203, 1)
+```
+
+Clé réservée :
+
+```text
+(716203, 1)
+```
+
+Le verrou est conservé pendant toute la transaction et libéré automatiquement au `COMMIT` ou au `ROLLBACK`.
+
+La migration V1.2 utilise le même verrou.
+
+### Validation de concurrence
+
+Deux connexions PostgreSQL indépendantes ont été testées.
+
+Résultat :
+
+```text
+holder: lock acquired
+holder: transaction completed
+waiter: lock acquired after 5.03 seconds
+waiter: transaction completed
+concurrency test completed
+```
+
+La seconde transaction attend donc correctement la libération du verrou.
+
+Les contraintes PostgreSQL restent la protection d’intégrité finale pour les writers externes qui n’utilisent pas ce verrou.
 
 ---
 
-## 15. Validation historique complète
+## 17. Migrations PostgreSQL
+
+Migrations actuelles :
+
+```text
+001_create_nasdaq_halts_schema.sql
+002_core_episode_event.sql
+002_fix_nasdaq_halt_close_status.sql
+003_update_nasdaq_raw_natural_key_v1_1.sql
+004_update_nasdaq_core_natural_key_v1_1.sql
+005_create_nasdaq_resumption.sql
+006_nasdaq_persistence_v1_2.sql
+```
+
+Deux migrations historiques portent le préfixe `002`.
+
+Cette anomalie est conservée et documentée; les fichiers ne doivent pas être renommés rétroactivement.
+
+### Migration 006
+
+```text
+database/migrations/006_nasdaq_persistence_v1_2.sql
+```
+
+Elle :
+
+- consolide les doublons RAW V1.2;
+- préserve et réoriente les relations CORE → RAW;
+- installe la clé naturelle RAW V1.2;
+- installe la clé naturelle CORE V1.2;
+- déduplique les observations de reprise;
+- installe `UNIQUE NULLS NOT DISTINCT`;
+- valide l’intégrité référentielle;
+- utilise le verrou `(716203, 1)`.
+
+La migration requiert PostgreSQL 15+ pour `UNIQUE NULLS NOT DISTINCT`.
+
+Une copie de test de la migration a été exécutée complètement en DEV avec `ROLLBACK` final.
+
+---
+
+## 18. Validation historique complète V1.2
 
 Plage :
 
@@ -532,111 +817,130 @@ Fichiers XML :
 2 432
 ```
 
-Résultats Python :
+Jours de marché observés :
 
 ```text
-Événements RAW parser : 69 186
-Événements uniques    : 68 170
-CORE episodes         : 68 035
-Durées calculables    : 67 997
-
-HALT close YES        : 1 780
-HALT close NO         : 62 917
-HALT UNKNOWN          : 33
-HALT MULTI_DAY        : 3 305
+1 738
 ```
 
-Validation PostgreSQL en dry-run :
+Résultats :
 
 ```text
-RAW inserted          : 58 701
+Événements bruts       : 69 186
+Événements uniques     : 68 170
+HALT RAW canoniques    : 68 072
+CORE episodes          : 68 017
+Tickers différents     : 9 718
+Lignes quotidiennes    : 50 000
+Durées calculables     : 67 983
+```
+
+Statuts de clôture :
+
+```text
+YES       : 1 777
+NO        : 62 902
+UNKNOWN   : 34
+```
+
+Le corpus historique complet a permis de remplacer plusieurs hypothèses V1.1 par les règles V1.2 actuellement validées.
+
+---
+
+## 19. Idempotence V1.2
+
+Réexécution historique complète de référence :
+
+```text
+RAW inserted          : 0
 RAW updated           : 0
-RAW unchanged         : 9 469
+RAW unchanged         : 68072
 
-CORE inserted         : 68 035
+RESUMPTION inserted   : 0
+RESUMPTION existing   : 68147
+
+CORE inserted         : 0
 CORE updated          : 0
-CORE unchanged        : 0
-
-CORE classified       : 68 035
-CORE expected         : 68 035
-
-CORE rows observed    : 68 035
-CORE -> RAW relations : 68 170
-RAW expected          : 68 170
-
-RAW with >1 CORE      : 0
-CORE with >1 RAW      : 90
-
-HISTORICAL VALIDATION : PASS
-ROLLBACK              : PASS
+CORE unchanged        : 68017
 ```
 
-Performance observée :
+Tests :
 
 ```text
-Parsing               : 5.636 s
-Déduplication         : 0.081 s
-CORE construction     : 0.225 s
-PostgreSQL total      : 47.140 s
-TOTAL                 : 53.087 s
+QVCG TEST  : PASS
+BCARU TEST : PASS
 ```
 
-Le temps PostgreSQL inclut le chargement RAW et CORE ainsi que les validations correspondantes.
+Ce résultat constitue le checkpoint d’idempotence séquentielle V1.2.
 
 ---
 
-## 16. Correction du modèle V1.1
+## 20. BCARU — fixture historique
 
-La V1.1 corrige une hypothèse V1.0 devenue fausse à volume historique réel :
+Le test BCARU ne repose plus sur un total cumulatif susceptible de changer avec les nouvelles collectes.
 
-### Ancienne hypothèse
-
-```text
-1 RAW -> 1 CORE
-```
-
-avec :
+Il utilise un fixture historique fixe jusqu’au :
 
 ```text
-UNIQUE(core.trade_halt_id)
+2026-08-27
 ```
 
-### Modèle V1.1
+Le fixture valide :
 
 ```text
-1 CORE -> N RAW
+21 épisodes CORE
+13 dates historiques
 ```
 
-avec une table de relation :
+Répartition attendue :
 
 ```text
-core.nasdaq_halt_episode_event
+2026-01-12 : 1
+2026-07-28 : 1
+2026-07-29 : 2
+2026-07-30 : 1
+2026-07-31 : 1
+2026-08-03 : 1
+2026-08-07 : 2
+2026-08-10 : 7
+2026-08-11 : 1
+2026-08-14 : 1
+2026-08-21 : 1
+2026-08-25 : 1
+2026-08-27 : 1
 ```
 
-et validation que chaque RAW appartient à au plus un CORE.
-
-La suppression de la contrainte :
+Le 2026-08-03 est également validé comme :
 
 ```text
-uq_nasdaq_halt_episode_trade_halt
+halt_at_close = YES
 ```
 
-est donc nécessaire.
+Les données officielles BCARU ont confirmé :
 
-La contrainte naturelle CORE V1.1 est :
-
-```text
-UNIQUE (
-    symbol,
-    market,
-    reason_code,
-    halt_start
-)
-```
+- des observations partielles et complètes pour un même HALT;
+- plusieurs HALTs distincts le même jour;
+- les reason codes T1/T2/T3 sur un même `halt_start`;
+- la sémantique CORE V1.2.
 
 ---
 
-## 17. Données processed
+## 21. Intégrité référentielle
+
+Après la persistance V1.2, les validations suivantes retournent zéro anomalie :
+
+```text
+broken_episode_raw_refs        : 0
+broken_relation_episode_refs   : 0
+broken_relation_raw_refs       : 0
+duplicate episode/raw pairs    : 0
+```
+
+Ces validations sont également intégrées à la migration 006.
+
+---
+
+## 22. Données processed
 
 Les CSV restent dérivés :
 
@@ -655,13 +959,14 @@ Ils servent à :
 - diagnostic;
 - comparaison;
 - export;
-- inspection.
+- inspection;
+- non-régression.
 
 Ils ne constituent pas la source d’intégration PostgreSQL.
 
 ---
 
-## 18. Métriques
+## 23. Métriques
 
 Les définitions métier sont maintenues dans :
 
@@ -669,80 +974,143 @@ Les définitions métier sont maintenues dans :
 docs/METRICS_SPECIFICATION.md
 ```
 
-Les objets analytics PostgreSQL restent différés jusqu’à validation complète :
+Les objets analytics PostgreSQL restent différés jusqu’à validation du calendrier officiel de marché et comparaison avec les métriques Python validées.
 
-- du calendrier de marché;
-- des épisodes multi-jours;
-- des statuts de clôture;
-- de la cardinalité RAW→CORE;
-- de l’équivalence Python/PostgreSQL.
+Objets conceptuels :
 
----
+```text
+analytics.ticker_halt_daily
+analytics.ticker_halt_metrics
+analytics.ticker_halt_reason_metrics
+```
 
-## 19. Concurrence
+La métrique :
 
-La V1.1 est validée pour l’exécution séquentielle.
+```text
+halts_per_market_day
+```
 
-Le writer utilise une logique batch et des contraintes PostgreSQL pour protéger l’intégrité.
-
-La concurrence entre plusieurs instances n’est pas encore considérée comme un scénario de production validé.
-
-Avant orchestration concurrente, une stratégie explicite `ON CONFLICT`, verrouillage ou équivalent devra être définie et testée.
+doit utiliser un calendrier de marché correctement défini.
 
 ---
 
-## 20. Limites restantes
+## 24. Loader CSV transitoire
 
-Avant certification PROD :
+Module :
 
-1. valider l’intégrité complète des 2 432 XML;
-2. valider la complétude exacte de la période historique;
-3. valider la clé naturelle RAW sur tout l’historique;
-4. confirmer la sémantique temporelle et le fuseau Nasdaq;
-5. valider le calendrier officiel des jours de marché;
-6. analyser les épisodes multi-jours;
-7. analyser les 90 CORE comportant plusieurs RAW;
-8. vérifier les événements présents dans plusieurs snapshots;
-9. définir si une provenance N snapshots → 1 RAW doit être matérialisée;
-10. tester les corrections réelles de données live;
-11. tester la concurrence avant orchestration multi-instance;
-12. valider les performances à volume de production;
-13. définir la période historique cinq ans officielle.
+```text
+src/load_postgresql.py
+```
+
+Le loader CSV a servi à la validation initiale de PostgreSQL.
+
+Il est conservé comme outil de migration ou de diagnostic.
+
+Il ne constitue pas le chemin de production.
+
+Le chemin de référence est :
+
+```text
+XML
+-> Python
+-> PostgreSQL RAW
+-> PostgreSQL CORE
+```
+
+avec conservation séparée des observations de reprise.
 
 ---
 
-## 21. Gouvernance documentaire
+## 25. Encodage
+
+Le dépôt contient :
+
+```text
+.editorconfig
+```
+
+avec encodage UTF-8.
+
+Sous Windows PowerShell 5.1 :
+
+```powershell
+Set-Content -Encoding utf8
+```
+
+peut écrire un BOM UTF-8.
+
+Pour les migrations SQL et autres fichiers devant être écrits sans BOM, utiliser explicitement :
+
+```powershell
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+```
+
+Cette règle a été ajoutée après qu’un BOM a provoqué une erreur de syntaxe lors d’un test `psql`.
+
+---
+
+## 26. Limites et travaux restants
+
+La persistance V1.2 est stabilisée en DEV.
+
+Les principaux travaux restant avant certification PROD sont :
+
+1. formaliser la sémantique temporelle et le fuseau Nasdaq;
+2. valider et modéliser le calendrier officiel des jours de marché;
+3. construire les objets analytics PostgreSQL;
+4. comparer les analytics PostgreSQL aux métriques Python validées;
+5. définir et tester la stratégie de sauvegarde/restauration;
+6. mettre en place l’orchestration centralisée;
+7. mettre en place l’exécution planifiée et à la demande;
+8. préparer les environnements TEST et PROD;
+9. définir la gestion centralisée des secrets;
+10. poursuivre les validations de données live réelles;
+11. envisager le durcissement `NOT NULL` de certains champs participant aux identités, notamment `core.nasdaq_halt_episode.market`, après validation dédiée;
+12. décider si une provenance explicite N snapshots → 1 RAW doit être matérialisée à l’avenir.
+
+Les validations de l’historique 2020-2026, de l’identité RAW V1.2, de l’identité CORE V1.2, de l’idempotence et de la concurrence ne sont plus des travaux futurs : elles sont complétées.
+
+---
+
+## 27. Gouvernance documentaire
 
 | Changement | Document |
 |---|---|
-| Flux, scripts, architecture | `ARCHITECTURE.md` |
+| Flux, scripts, architecture du collecteur | `ARCHITECTURE.md` |
 | Tables, colonnes, relations | `DATA_MODEL.md` |
 | Définitions de métriques | `METRICS_SPECIFICATION.md` |
 | Utilisation | `README.md` |
 | PostgreSQL transversal | `../../../docs/database.md` |
 | Architecture plateforme | `../../../docs/architecture.md` |
+| Installation et environnement | `../../../docs/installation.md` |
 
 Toute modification de logique ou de modèle doit être documentée avec le code correspondant.
 
 ---
 
-## 22. État
+## 28. État
 
 ```text
-V1.1 — HISTORICAL CORE LOAD VALIDATED
+V1.2 — POSTGRESQL PERSISTENCE STABILIZED
 ```
 
-La V1.1 est validée en DEV sur l’historique chargé :
+Checkpoint validé :
 
 ```text
 2 432 XML
-68 170 RAW uniques
-68 035 CORE episodes
-68 170 relations CORE→RAW
-90 CORE multi-RAW
-0 RAW multi-CORE
+69 186 événements bruts
+68 170 observations uniques
+68 072 HALTs RAW canoniques
+68 147 observations RESUMPTION persistées
+68 017 épisodes CORE
+QVCG PASS
+BCARU PASS
+Intégrité référentielle PASS
+Idempotence séquentielle PASS
+Concurrence advisory lock PASS
+Migration 006 rollback test PASS
 ```
 
-La validation a été exécutée en transaction et terminée par rollback.
+La V1.2 constitue désormais l’architecture de référence du collecteur Nasdaq Halts en DEV.
 
-Le modèle est donc prêt pour le prochain checkpoint Git et pour la poursuite de l’analyse des données historiques avant stabilisation PROD.
+Les prochaines étapes portent principalement sur la couche analytics, le calendrier de marché, l’exploitation centralisée et la préparation des environnements futurs.
