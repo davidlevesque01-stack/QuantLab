@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime
+from datetime import date, datetime
 
 from analytics.nasdaq_halts.analysis_service import AnalysisService
 from analytics.nasdaq_halts.models import AnalysisRequest
@@ -154,7 +154,7 @@ def test_metric_2_three_episodes_over_two_halt_days():
     assert result.metric_2 == 1.5
 
 
-def test_metric_2_multiday_episode_counts_one_core_episode():
+def test_metric_2_multiday_episode_counts_active_episode_each_halt_day():
     episodes = [
         {
             "trading_date": date(2020, 3, 12),
@@ -177,7 +177,39 @@ def test_metric_2_multiday_episode_counts_one_core_episode():
     )
 
     assert result.metric_1 == 3
-    assert result.metric_2 == 1 / 3
+    assert result.metric_2 == 1.0
+
+
+
+def test_metric_2_uses_daily_active_episode_counts():
+    episodes = [
+        {
+            "trading_date": date(2026, 8, 14),
+            "halt_start": datetime(2026, 8, 14, 14, 15),
+            "halt_end": datetime(2026, 8, 25, 9, 0),
+            "end_time": datetime(2026, 8, 25, 9, 0),
+        },
+        {
+            "trading_date": date(2026, 8, 25),
+            "halt_start": datetime(2026, 8, 25, 11, 0),
+            "halt_end": datetime(2026, 8, 25, 11, 5),
+            "end_time": datetime(2026, 8, 25, 11, 5),
+        },
+    ]
+
+    request = AnalysisRequest(
+        ticker="ABCD",
+        observation_date=date(2026, 8, 25),
+        lookback_months=None,
+        reason_codes=("LUDP",),
+    )
+
+    result = AnalysisService().analyze(request, episodes=episodes)
+
+    # 8 trading Halt Days from the multi-day episode, with two active
+    # episodes on Aug 25: 9 daily episode-presences / 8 Halt Days.
+    assert result.metric_1 == 8
+    assert result.metric_2 == 9 / 8
 
 
 def test_metric_3_no_halt_days():

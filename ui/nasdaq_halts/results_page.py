@@ -12,17 +12,17 @@ from PySide6.QtWidgets import (
 
 
 METRIC_DEFINITIONS = [
-    ("Metric 1", "Number of Halt Days"),
-    ("Metric 2", "Average Halts per Halt Day"),
-    ("Metric 3", "Days Since Last Halt"),
-    ("Metric 4", "Average Time Between Halt Days"),
-    ("Metric 5", "Sequential Halt Days Identified"),
-    ("Metric 6", "Number of Sequential Halt-Day Blocks"),
-    ("Metric 7", "Average Sequential Block Length"),
-    ("Metric 8", "Maximum Sequential Block Length"),
-    ("Metric 9", "Number of Halt Days at Close"),
-    ("Metric 10", "Did the Ticker HALT the Specified Day?"),
-    ("Metric 11", "Number of HALTs on the Specified Day"),
+    ("Metric 1", "Number of Halt Days (trading days)"),
+    ("Metric 2", "Average Active HALTs per Halt Day (HALTs / trading day)"),
+    ("Metric 3", "Days Since Last Halt (calendar days)"),
+    ("Metric 4", "Average Time Between Halt Days (calendar days)"),
+    ("Metric 5", "Sequential Halt Days Identified (Yes/No)"),
+    ("Metric 6", "Number of Sequential Halt-Day Blocks (blocks)"),
+    ("Metric 7", "Average Sequential Block Length (trading days)"),
+    ("Metric 8", "Maximum Sequential Block Length (trading days)"),
+    ("Metric 9", "Number of Halt Days at Close (trading days)"),
+    ("Metric 10", "Did the Ticker HALT the Specified Day? (Yes/No)"),
+    ("Metric 11", "Number of HALTs on the Specified Day (HALTs)"),
 ]
 
 
@@ -60,6 +60,11 @@ class ResultsPage(QWidget):
             METRIC_DEFINITIONS[9:]
         )
 
+        # Ensure all historical metrics (1-9) are visible.
+        # Keep the two observation-day rows compact.
+        self.historical_table.setMinimumHeight(340)
+        self.observation_table.setFixedHeight(90)
+
         back_button = QPushButton("Back")
         back_button.setFixedWidth(90)
         back_button.clicked.connect(self._on_back)
@@ -80,13 +85,17 @@ class ResultsPage(QWidget):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
-        table.setColumnWidth(0, 330)
+        table.setColumnWidth(0, 390)
+        table.horizontalHeaderItem(0).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        table.horizontalHeaderItem(1).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
         for number, name in definitions:
             row = table.rowCount()
             table.insertRow(row)
             table.setItem(row, 0, QTableWidgetItem(f"{number} - {name}"))
-            table.setItem(row, 1, QTableWidgetItem("—"))
+            value_item = QTableWidgetItem("—")
+            value_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row, 1, value_item)
 
         return table
 
@@ -95,7 +104,8 @@ class ResultsPage(QWidget):
     ) -> None:
         self.context_label.setText(
             f"Ticker: {ticker}    |    Observation Date: {observation_date}    |    "
-            f"Period: {period}    |    HALT Reason Code: {reasons}"
+            f"Period: {period}\n"
+            f"HALT Reason Codes: {reasons}"
         )
 
     def set_values(self, values: dict[str, object]) -> None:
@@ -104,7 +114,19 @@ class ResultsPage(QWidget):
                 label = table.item(row, 0).text()
                 metric_key = label.split(" - ", 1)[0]
                 value = values.get(metric_key, "—")
-                table.setItem(row, 1, QTableWidgetItem(str(value)))
+                value_item = QTableWidgetItem(self._format_value(value))
+                value_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                table.setItem(row, 1, value_item)
+
+    @staticmethod
+    def _format_value(value: object) -> str:
+        """Format metric values for display without altering raw calculations."""
+        if isinstance(value, float):
+            rounded = round(value, 2)
+            if rounded.is_integer():
+                return str(int(rounded))
+            return f"{rounded:.2f}".rstrip("0").rstrip(".")
+        return str(value)
 
     def prepare_batch_table(self, row_count: int) -> QTableWidget:
         table = QTableWidget(row_count, 13)

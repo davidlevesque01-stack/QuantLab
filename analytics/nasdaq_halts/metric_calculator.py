@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 
@@ -21,7 +21,7 @@ def calculate_metrics(
 
     Metric 2
     -------
-    Average HALTs per Halt Day.
+    Average active HALT episodes per Halt Day.
 
     Metric 3
     -------
@@ -42,7 +42,7 @@ def calculate_metrics(
     metric_1 = dataset.halt_day_count
 
     metric_2 = (
-        dataset.core_episode_count / metric_1
+        sum(day.episode_count for day in dataset.halt_days) / metric_1
         if metric_1 > 0
         else "N/A"
     )

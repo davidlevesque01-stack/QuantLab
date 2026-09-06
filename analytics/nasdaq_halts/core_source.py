@@ -15,16 +15,13 @@ class NasdaqHaltCoreSource:
         ticker: str,
         start_date: date | None,
         end_date: date,
-        reason_codes: tuple[str, ...],
+        reason_codes: tuple[str, ...] | None,
     ) -> list[dict[str, Any]]:
         """Fetch CORE HALT episodes for an analysis context.
 
         The end date is inclusive. This is intentional because the
         observation day is part of the historical window.
         """
-        if not reason_codes:
-            return []
-
         query = """
             SELECT
                 symbol,
@@ -37,14 +34,23 @@ class NasdaqHaltCoreSource:
             FROM core.nasdaq_halt_episode
             WHERE symbol = %s
               AND halt_start < (%s::date + INTERVAL '1 day')
-              AND reason_code = ANY(%s)
         """
 
         params: list[Any] = [
             ticker,
             end_date,
-            list(reason_codes),
         ]
+
+        # None means ALL: no reason_code predicate at all.
+        # This intentionally includes legacy CORE rows whose reason_code
+        # contains a resumption/action code such as T3.
+        if reason_codes is not None:
+            if not reason_codes:
+                return []
+            query += """
+              AND reason_code = ANY(%s)
+            """
+            params.append(list(reason_codes))
 
         if start_date is not None:
             query += """

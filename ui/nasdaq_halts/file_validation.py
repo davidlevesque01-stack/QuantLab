@@ -63,17 +63,11 @@ def _validate_csv(file_path: Path, separator: str) -> FileValidationResult:
             date_column = normalized.get("date")
             ticker_column = normalized.get("ticker")
 
-            if not date_column or not ticker_column:
-                missing = []
-                if not date_column:
-                    missing.append("Date")
-                if not ticker_column:
-                    missing.append("Ticker")
-                return FileValidationResult(
-                    False, file_path.name, "CSV", 0,
-                    bool(date_column), bool(ticker_column), 0, 0,
-                    [f"Missing required column(s): {', '.join(missing)}."]
-                )
+            missing = []
+            if not date_column:
+                missing.append("Date")
+            if not ticker_column:
+                missing.append("Ticker")
 
             count = 0
             invalid_dates = 0
@@ -81,21 +75,44 @@ def _validate_csv(file_path: Path, separator: str) -> FileValidationResult:
 
             for row in reader:
                 count += 1
-                ticker = (row.get(ticker_column) or "").strip()
-                raw_date = (row.get(date_column) or "").strip()
 
-                if not ticker:
+                if ticker_column:
+                    ticker = (row.get(ticker_column) or "").strip()
+                    if not ticker:
+                        empty_tickers += 1
+                else:
+                    # A missing required Ticker column means every
+                    # observation has an unusable/empty ticker.
                     empty_tickers += 1
 
-                if not _valid_date(raw_date):
+                if date_column:
+                    raw_date = (row.get(date_column) or "").strip()
+                    if not _valid_date(raw_date):
+                        invalid_dates += 1
+                else:
+                    # A missing required Date column means every
+                    # observation has an unusable date.
                     invalid_dates += 1
 
-            valid = invalid_dates == 0 and empty_tickers == 0
+            errors = []
+            if missing:
+                errors.append(
+                    f"Missing required column(s): {', '.join(missing)}."
+                )
+            if invalid_dates or empty_tickers:
+                errors.append("One or more observations are invalid.")
+
+            valid = (
+                not missing
+                and invalid_dates == 0
+                and empty_tickers == 0
+            )
 
             return FileValidationResult(
                 valid, file_path.name, "CSV", count,
-                True, True, invalid_dates, empty_tickers,
-                [] if valid else ["One or more observations are invalid."]
+                bool(date_column), bool(ticker_column),
+                invalid_dates, empty_tickers,
+                errors,
             )
 
     except UnicodeDecodeError:
@@ -140,19 +157,11 @@ def _validate_xlsx(file_path: Path) -> FileValidationResult:
         date_index = normalized.get("date")
         ticker_index = normalized.get("ticker")
 
-        if date_index is None or ticker_index is None:
-            missing = []
-            if date_index is None:
-                missing.append("Date")
-            if ticker_index is None:
-                missing.append("Ticker")
-            workbook.close()
-            return FileValidationResult(
-                False, file_path.name, "XLSX", 0,
-                date_index is not None, ticker_index is not None,
-                0, 0,
-                [f"Missing required column(s): {', '.join(missing)}."]
-            )
+        missing = []
+        if date_index is None:
+            missing.append("Date")
+        if ticker_index is None:
+            missing.append("Ticker")
 
         count = 0
         invalid_dates = 0
@@ -160,23 +169,54 @@ def _validate_xlsx(file_path: Path) -> FileValidationResult:
 
         for row in rows:
             count += 1
-            ticker_value = row[ticker_index] if ticker_index < len(row) else None
-            date_value = row[date_index] if date_index < len(row) else None
 
-            if ticker_value is None or not str(ticker_value).strip():
+            if ticker_index is None:
+                # A missing required Ticker column means every
+                # observation has an unusable/empty ticker.
                 empty_tickers += 1
+            else:
+                ticker_value = (
+                    row[ticker_index]
+                    if ticker_index < len(row)
+                    else None
+                )
+                if ticker_value is None or not str(ticker_value).strip():
+                    empty_tickers += 1
 
-            if not _valid_date(date_value):
+            if date_index is None:
+                # A missing required Date column means every
+                # observation has an unusable date.
                 invalid_dates += 1
+            else:
+                date_value = (
+                    row[date_index]
+                    if date_index < len(row)
+                    else None
+                )
+                if not _valid_date(date_value):
+                    invalid_dates += 1
 
         workbook.close()
 
-        valid = invalid_dates == 0 and empty_tickers == 0
+        errors = []
+        if missing:
+            errors.append(
+                f"Missing required column(s): {', '.join(missing)}."
+            )
+        if invalid_dates or empty_tickers:
+            errors.append("One or more observations are invalid.")
+
+        valid = (
+            not missing
+            and invalid_dates == 0
+            and empty_tickers == 0
+        )
 
         return FileValidationResult(
             valid, file_path.name, "XLSX", count,
-            True, True, invalid_dates, empty_tickers,
-            [] if valid else ["One or more observations are invalid."]
+            date_index is not None, ticker_index is not None,
+            invalid_dates, empty_tickers,
+            errors,
         )
 
     except Exception as exc:
@@ -204,3 +244,105 @@ def _valid_date(value) -> bool:
             pass
 
     return False
+
+
+
+def read_input_observations(
+    path: str,
+    separator: str = ",",
+) -> list[tuple[datetime, str]]:
+    """Read validated Date/Ticker observations from CSV or XLSX.
+
+    Returns (datetime, normalized ticker) tuples in source-file order.
+    Call validate_input_file first; this function raises ValueError if an
+    unexpected invalid row is encountered.
+    """
+    file_path = Path(path)
+    suffix = file_path.suffix.lower()
+
+    if suffix == ".csv":
+        return _read_csv_observations(file_path, separator)
+    if suffix == ".xlsx":
+        return _read_xlsx_observations(file_path)
+
+    raise ValueError("Unsupported file format. Use XLSX or CSV.")
+
+
+def _parse_date(value) -> datetime:
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+
+    raise ValueError(f"Invalid date: {value!r}")
+
+
+def _read_csv_observations(
+    file_path: Path,
+    separator: str,
+) -> list[tuple[datetime, str]]:
+    observations = []
+
+    with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter=separator)
+        normalized = {
+            name.strip().lower(): name
+            for name in (reader.fieldnames or [])
+            if name is not None
+        }
+        date_column = normalized["date"]
+        ticker_column = normalized["ticker"]
+
+        for row_number, row in enumerate(reader, start=2):
+            ticker = (row.get(ticker_column) or "").strip().upper()
+            raw_date = row.get(date_column)
+            if not ticker:
+                raise ValueError(f"Empty ticker on row {row_number}.")
+            observations.append((_parse_date(raw_date), ticker))
+
+    return observations
+
+
+def _read_xlsx_observations(
+    file_path: Path,
+) -> list[tuple[datetime, str]]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.active
+        rows = sheet.iter_rows(values_only=True)
+        header = next(rows)
+        normalized = {
+            str(value).strip().lower(): index
+            for index, value in enumerate(header)
+            if value is not None and str(value).strip()
+        }
+        date_index = normalized["date"]
+        ticker_index = normalized["ticker"]
+
+        observations = []
+        for row_number, row in enumerate(rows, start=2):
+            ticker_value = (
+                row[ticker_index] if ticker_index < len(row) else None
+            )
+            date_value = (
+                row[date_index] if date_index < len(row) else None
+            )
+            ticker = (
+                str(ticker_value).strip().upper()
+                if ticker_value is not None
+                else ""
+            )
+            if not ticker:
+                raise ValueError(f"Empty ticker on row {row_number}.")
+            observations.append((_parse_date(date_value), ticker))
+
+        return observations
+    finally:
+        workbook.close()

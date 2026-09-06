@@ -27,11 +27,16 @@ class AnalysisService:
                 raise RuntimeError(
                     "No CORE source configured. Supply episodes or a core_source."
                 )
+            source_reason_codes = (
+                None
+                if "ALL" in req.reason_codes
+                else req.reason_codes
+            )
             episodes = self.core_source.fetch_core_episodes(
                 ticker=req.ticker,
                 start_date=None,
                 end_date=req.observation_date,
-                reason_codes=req.reason_codes,
+                reason_codes=source_reason_codes,
             )
 
         dataset = build_historical_dataset(req, episodes)

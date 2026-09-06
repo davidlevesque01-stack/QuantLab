@@ -1,8 +1,9 @@
-﻿from pathlib import Path
+from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QSettings, Qt
 from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QDateEdit,
     QFormLayout,
@@ -13,35 +14,56 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
+    QDialog,
+    QTableWidget,
+    QTableWidgetItem,
     QRadioButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from ui.nasdaq_halts.file_validation import validate_input_file
+from ui.nasdaq_halts.file_validation import (
+    read_input_observations,
+    validate_input_file,
+)
 from analytics.nasdaq_halts.analysis_service import AnalysisService
 from analytics.nasdaq_halts.core_source import NasdaqHaltCoreSource
 from analytics.nasdaq_halts.models import AnalysisRequest
 from ui.nasdaq_halts.results_page import ResultsPage
+from ui.nasdaq_halts.batch_results import BatchResultsPage
+from ui.nasdaq_halts.reason_codes import (
+    ALL_REASON_CODE,
+    DEFAULT_HALT_REASON_CODE,
+    HALT_REASON_REFERENCE,
+    RESUMPTION_REASON_REFERENCE,
+    analytical_reason_choices,
+)
 
 
-REASON_CODES = ["LUDP", "M", "T1", "T2", "T3", "T12", "D", "H11"]
+REASON_CODES = analytical_reason_choices()
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
+        self.settings = QSettings("QuantLab", "NasdaqHaltAnalytics")
+        self._last_file_directory = self.settings.value(
+            "last_file_directory", "", type=str
+        )
+
         self.setWindowTitle("QuantLab - Nasdaq HALT Analytics")
-        self.setFixedSize(620, 500)
+        self.setFixedSize(620, 700)
 
         self._selected_file_path = ""
         self.analysis_service = AnalysisService(
                 core_source=NasdaqHaltCoreSource()
             )
         self.results_page = ResultsPage(self._show_manual_page)
+        self.batch_results_page = BatchResultsPage(self._show_file_page)
 
 
         self.stack = QStackedWidget()
@@ -51,6 +73,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.manual_page)
         self.stack.addWidget(self.file_page)
         self.stack.addWidget(self.results_page)
+        self.stack.addWidget(self.batch_results_page)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -60,18 +83,21 @@ class MainWindow(QMainWindow):
 
     def _build_manual_page(self) -> QWidget:
         page = QWidget()
+
         layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         title = QLabel("QuantLab - Nasdaq HALT Analytics")
         title.setStyleSheet("font-size: 22px; font-weight: bold;")
+
         mode = QLabel("Manual Mode")
         mode.setStyleSheet("font-size: 17px; font-weight: bold;")
 
+        # Top input section
         form = QFormLayout()
         form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(11)
+        form.setVerticalSpacing(10)
 
         self.ticker_edit = QLineEdit()
         self.ticker_edit.setPlaceholderText("Ticker ID")
@@ -91,26 +117,63 @@ class MainWindow(QMainWindow):
         period_container = QWidget()
         period_layout = QVBoxLayout(period_container)
         period_layout.setContentsMargins(0, 0, 0, 0)
-        period_layout.setSpacing(3)
+        period_layout.setSpacing(2)
+
         period_layout.addWidget(self.period_edit)
-        help_label = QLabel("Leave blank to use all available historical data.")
+
+        help_label = QLabel(
+            "Leave blank to use all available historical data."
+        )
         help_label.setStyleSheet("font-size: 10px; color: #666666;")
         period_layout.addWidget(help_label)
-
-        self.reason_list = self._build_reason_list()
 
         form.addRow("Ticker", self.ticker_edit)
         form.addRow("Start Date", self.start_date_edit)
         form.addRow("Historical Period (months)", period_container)
-        form.addRow("HALT Reason Code", self.reason_list)
 
+        # Reason-code section kept separate so it does not stretch
+        # the three input rows vertically.
+        self.reason_list = self._build_reason_list()
+
+        reason_row = QHBoxLayout()
+        reason_row.setContentsMargins(0, 4, 0, 0)
+        reason_row.setSpacing(18)
+
+        reason_label = QLabel("HALT Reason Code")
+        reason_label.setFixedWidth(145)
+
+        reason_info = QPushButton("i")
+        reason_info.setFixedSize(32, 32)
+        reason_info.setToolTip("Nasdaq HALT / RESUMPTION reason-code reference")
+        reason_info.setStyleSheet(
+            "QPushButton {"
+            "font-size: 18px;"
+            "font-weight: bold;"
+            "border: 2px solid #4A90E2;"
+            "border-radius: 15px;"
+            "background: white;"
+            "color: #2F6FB2;"
+            "padding: 0px;"
+            "}"
+            "QPushButton:hover { background: #EEF6FF; }"
+        )
+        reason_info.clicked.connect(self._show_reason_code_reference)
+
+        reason_row.addWidget(reason_label)
+        reason_row.addWidget(self.reason_list)
+        reason_row.addWidget(reason_info, 0, Qt.AlignmentFlag.AlignTop)
+        reason_row.addStretch()
+
+        # Buttons
         calculate = QPushButton("CALCULATE")
         calculate.setFixedWidth(130)
         calculate.clicked.connect(self._validate_manual_input)
 
         file_button = QPushButton("File Mode")
         file_button.setFixedWidth(100)
-        file_button.clicked.connect(lambda: self.stack.setCurrentWidget(self.file_page))
+        file_button.clicked.connect(
+            lambda: self.stack.setCurrentWidget(self.file_page)
+        )
 
         buttons = QHBoxLayout()
         buttons.addStretch()
@@ -121,7 +184,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(mode)
         layout.addSpacing(4)
         layout.addLayout(form)
+        layout.addLayout(reason_row)
+        layout.addStretch()
         layout.addLayout(buttons)
+
         return page
 
     def _build_file_page(self) -> QWidget:
@@ -204,15 +270,46 @@ class MainWindow(QMainWindow):
 
         self.file_reason_list = self._build_reason_list()
 
+        file_reason_container = QWidget()
+        file_reason_layout = QHBoxLayout(file_reason_container)
+        file_reason_layout.setContentsMargins(0, 0, 0, 0)
+        file_reason_layout.setSpacing(8)
+        file_reason_layout.addWidget(self.file_reason_list)
+
+        file_reason_info = QPushButton("i")
+        file_reason_info.setFixedSize(32, 32)
+        file_reason_info.setToolTip(
+            "Nasdaq HALT / RESUMPTION reason-code reference"
+        )
+        file_reason_info.setStyleSheet(
+            "QPushButton {"
+            "font-size: 18px;"
+            "font-weight: bold;"
+            "border: 2px solid #4A90E2;"
+            "border-radius: 15px;"
+            "background: white;"
+            "color: #2F6FB2;"
+            "padding: 0px;"
+            "}"
+            "QPushButton:hover { background: #EEF6FF; }"
+        )
+        file_reason_info.clicked.connect(self._show_reason_code_reference)
+        file_reason_layout.addWidget(
+            file_reason_info,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        file_reason_layout.addStretch()
+
         form.addRow("Input File", file_widget)
         form.addRow("File Format", format_widget)
         form.addRow("CSV Separator", separator_widget)
         form.addRow("Historical Period (months)", period_container)
-        form.addRow("HALT Reason Code", self.file_reason_list)
+        form.addRow("HALT Reason Code", file_reason_container)
 
-        validate = QPushButton("VALIDATE FILE")
+        validate = QPushButton("CALCULATE")
         validate.setFixedWidth(130)
-        validate.clicked.connect(self._validate_file_input)
+        validate.clicked.connect(self._calculate_file_input)
 
         manual = QPushButton("Manual Mode")
         manual.setFixedWidth(100)
@@ -233,16 +330,114 @@ class MainWindow(QMainWindow):
     def _build_reason_list(self) -> QListWidget:
         widget = QListWidget()
         widget.setFixedWidth(190)
-        widget.setFixedHeight(105)
+
         for code in REASON_CODES:
             item = QListWidgetItem(code)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+
             item.setCheckState(
-                Qt.CheckState.Checked if code == "LUDP"
+                Qt.CheckState.Checked
+                if code == DEFAULT_HALT_REASON_CODE
                 else Qt.CheckState.Unchecked
             )
+
             widget.addItem(item)
+
+        # Give Qt enough room for every analytical choice without a scrollbar.
+        widget.setFixedHeight(len(REASON_CODES) * 30 + 4)
+
+        widget.itemChanged.connect(
+            lambda item: self._handle_reason_code_change(widget, item)
+        )
+
         return widget
+
+
+    def _handle_reason_code_change(
+        self,
+        widget: QListWidget,
+        item: QListWidgetItem,
+    ) -> None:
+        """Keep ALL mutually exclusive with explicit HALT reason codes."""
+        widget.blockSignals(True)
+        try:
+            if item.text() == ALL_REASON_CODE:
+                if item.checkState() == Qt.CheckState.Checked:
+                    for i in range(1, widget.count()):
+                        widget.item(i).setCheckState(Qt.CheckState.Unchecked)
+                elif not self._selected_reason_codes(widget):
+                    self._set_default_reason(widget)
+                return
+
+            if item.checkState() == Qt.CheckState.Checked:
+                all_item = widget.item(0)
+                all_item.setCheckState(Qt.CheckState.Unchecked)
+                return
+
+            if not self._selected_reason_codes(widget):
+                self._set_default_reason(widget)
+        finally:
+            widget.blockSignals(False)
+
+    def _set_default_reason(self, widget: QListWidget) -> None:
+        for i in range(widget.count()):
+            widget.item(i).setCheckState(
+                Qt.CheckState.Checked
+                if widget.item(i).text() == DEFAULT_HALT_REASON_CODE
+                else Qt.CheckState.Unchecked
+            )
+
+    def _show_reason_code_reference(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Nasdaq Reason Code Reference")
+        dialog.resize(620, 620)
+
+        layout = QVBoxLayout(dialog)
+
+        intro = QLabel(
+            "HALT and RESUMPTION codes have different analytical meanings. "
+            "T3 is a RESUMPTION action code and is therefore not offered as "
+            "a normal HALT-reason selector."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        for title_text, rows in (
+            ("HALT reason codes", HALT_REASON_REFERENCE),
+            ("RESUMPTION reason codes", RESUMPTION_REASON_REFERENCE),
+        ):
+            title = QLabel(title_text)
+            title.setStyleSheet("font-weight: bold;")
+            layout.addWidget(title)
+
+            table = QTableWidget(len(rows), 3)
+            table.setHorizontalHeaderLabels(["Code", "Description", "Type"])
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+            table.setColumnWidth(0, 85)
+            table.setColumnWidth(1, 380)
+            table.horizontalHeader().setStretchLastSection(True)
+
+            for row_index, (code, description, code_type) in enumerate(rows):
+                code_item = QTableWidgetItem(code)
+                code_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                description_item = QTableWidgetItem(description)
+                type_item = QTableWidgetItem(code_type)
+                type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+                table.setItem(row_index, 0, code_item)
+                table.setItem(row_index, 1, description_item)
+                table.setItem(row_index, 2, type_item)
+
+            table.setMinimumHeight(min(250, 30 + len(rows) * 24))
+            layout.addWidget(table)
+
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        dialog.exec()
 
     def _normalize_ticker(self, text: str) -> None:
         normalized = text.upper()
@@ -254,11 +449,14 @@ class MainWindow(QMainWindow):
             self.ticker_edit.blockSignals(False)
 
     def _selected_reason_codes(self, widget: QListWidget) -> list[str]:
-        return [
+        selected = [
             widget.item(i).text()
             for i in range(widget.count())
             if widget.item(i).checkState() == Qt.CheckState.Checked
         ]
+        if ALL_REASON_CODE in selected:
+            return [ALL_REASON_CODE]
+        return selected
 
     def _browse_input_file(self) -> None:
         if self.csv_radio.isChecked():
@@ -269,7 +467,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select input file",
-            "",
+            self._last_file_directory,
             file_filter,
         )
 
@@ -279,6 +477,12 @@ class MainWindow(QMainWindow):
         self._selected_file_path = path
         self.file_path_edit.setText(Path(path).name)
         self.file_path_edit.setToolTip(path)
+
+        self._last_file_directory = str(Path(path).parent)
+        self.settings.setValue(
+            "last_file_directory",
+            self._last_file_directory,
+        )
 
         suffix = Path(path).suffix.lower()
         if suffix == ".csv":
@@ -370,11 +574,18 @@ class MainWindow(QMainWindow):
     def _show_manual_page(self) -> None:
         self.stack.setCurrentWidget(self.manual_page)
 
-    def _validate_file_input(self) -> None:
+    def _show_file_page(self) -> None:
+        self.stack.setCurrentWidget(self.file_page)
+
+    def _calculate_file_input(self) -> None:
         path = self._selected_file_path
 
         if not path:
-            QMessageBox.warning(self, "File validation", "Please select an input file.")
+            QMessageBox.warning(
+                self,
+                "File analysis",
+                "Please select an input file.",
+            )
             return
 
         actual_suffix = Path(path).suffix.lower()
@@ -385,43 +596,139 @@ class MainWindow(QMainWindow):
             actual = actual_suffix or "unknown"
             QMessageBox.warning(
                 self,
-                "File validation",
+                "File analysis",
                 f"The selected file does not match the selected format.\n\n"
                 f"Selected format: {expected}\n"
-                f"File extension: {actual}\n\n"
-                "Please select the matching format or choose another file.",
+                f"File extension: {actual}",
             )
             return
 
-        if not self._selected_reason_codes(self.file_reason_list):
+        selected_reasons = self._selected_reason_codes(self.file_reason_list)
+        if not selected_reasons:
             QMessageBox.warning(
                 self,
-                "File validation",
-                "At least one HALT reason code must be selected."
+                "File analysis",
+                "At least one HALT reason code must be selected.",
             )
             return
 
         separator = ";" if self.semicolon_radio.isChecked() else ","
-        result = validate_input_file(path, separator)
+        validation = validate_input_file(path, separator)
 
-        status = "PASS" if result.valid else "FAILED"
-        details = [
-            f"File              {result.file_name}",
-            f"Format            {result.file_format}",
-            f"Observations      {result.observation_count}",
-            "",
-            f"Date column       {'Found' if result.date_column_found else 'Missing'}",
-            f"Ticker column     {'Found' if result.ticker_column_found else 'Missing'}",
-            f"Invalid dates     {result.invalid_dates}",
-            f"Empty tickers     {result.empty_tickers}",
-        ]
+        if not validation.valid:
+            details = "\n".join(validation.errors)
+            QMessageBox.warning(
+                self,
+                "File validation failed",
+                f"Observations: {validation.observation_count}\n"
+                f"Invalid dates: {validation.invalid_dates}\n"
+                f"Empty tickers: {validation.empty_tickers}\n\n"
+                f"{details}",
+            )
+            return
 
-        if result.errors:
-            details.extend(["", "Errors:"])
-            details.extend(result.errors)
+        period_text = self.file_period_edit.text().strip()
+        lookback_months = int(period_text) if period_text else None
 
-        QMessageBox.information(
+        try:
+            observations = read_input_observations(path, separator)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "File read error",
+                f"The validated file could not be read.\n\n{exc}",
+            )
+            return
+
+        output_rows = []
+        failures = []
+
+        total_observations = len(observations)
+        progress = QProgressDialog(
+            "Preparing calculations...",
+            "Cancel",
+            0,
+            total_observations,
             self,
-            f"File Validation - {status}",
-            "\n".join(details),
         )
+        progress.setWindowTitle("QuantLab - Calculating")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+        QApplication.processEvents()
+
+        cancelled = False
+
+        for index, (observation_datetime, ticker) in enumerate(
+            observations,
+            start=1,
+        ):
+            if progress.wasCanceled():
+                cancelled = True
+                break
+
+            progress.setLabelText(
+                f"Calculating {index} of {total_observations}: {ticker}"
+            )
+            QApplication.processEvents()
+
+            row_number = index + 1
+            request = AnalysisRequest(
+                ticker=ticker,
+                observation_date=observation_datetime.date(),
+                lookback_months=lookback_months,
+                reason_codes=tuple(selected_reasons),
+            )
+
+            try:
+                result = self.analysis_service.analyze(request)
+            except Exception as exc:
+                failures.append(f"Row {row_number} ({ticker}): {exc}")
+            else:
+                row = {
+                    "Date": result.observation_date.strftime("%d/%m/%Y"),
+                    "Ticker": result.ticker,
+                }
+                row.update(result.as_dict())
+                output_rows.append(row)
+
+            progress.setValue(index)
+            QApplication.processEvents()
+
+        progress.close()
+
+        if cancelled:
+            QMessageBox.information(
+                self,
+                "File analysis cancelled",
+                f"Calculation cancelled after "
+                f"{len(output_rows) + len(failures)} of "
+                f"{total_observations} observations.",
+            )
+            return
+
+        if not output_rows:
+            message = "No observation could be calculated."
+            if failures:
+                message += "\n\n" + "\n".join(failures[:10])
+            QMessageBox.critical(self, "File analysis", message)
+            return
+
+        self.batch_results_page.set_source_directory(
+            str(Path(path).parent)
+        )
+        self.batch_results_page.set_rows(output_rows)
+        self.stack.setCurrentWidget(self.batch_results_page)
+
+        if failures:
+            QMessageBox.warning(
+                self,
+                "File analysis completed with errors",
+                f"Successful: {len(output_rows)}\n"
+                f"Failed: {len(failures)}\n\n"
+                + "\n".join(failures[:10]),
+            )
+
