@@ -104,13 +104,13 @@ Les objets analytiques Nasdaq Halts ne sont pas encore créés.
 Le modèle PostgreSQL Nasdaq Halt actuel est :
 
 ```text
-Data Model V1.2
+Data Model V1.3
 ```
 
 La persistance applicative correspondante est :
 
 ```text
-PostgreSQL Persistence V1.2
+PostgreSQL Persistence V1.3.2
 ```
 
 Le modèle distingue explicitement :
@@ -137,6 +137,7 @@ Fichiers actuels :
 004_update_nasdaq_core_natural_key_v1_1.sql
 005_create_nasdaq_resumption.sql
 006_nasdaq_persistence_v1_2.sql
+007_nasdaq_resumption_reason_v1_3.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -226,6 +227,24 @@ Elle :
 - exécute des validations d'intégrité;
 - utilise le verrou Nasdaq QuantLab `(716203, 1)`;
 - s'exécute dans une transaction.
+
+### 5.9 Migration 007
+
+`007_nasdaq_resumption_reason_v1_3.sql` introduit la séparation V1.3 entre motif du HALT et motif/action de reprise.
+
+Elle :
+
+- ajoute `raw.nasdaq_resumption.resumption_reason_code VARCHAR(20)`;
+- rend `raw.nasdaq_resumption.reason_code` nullable;
+- remplace l'identité d'observation par une identité à neuf champs;
+- conserve `reason_code` et `resumption_reason_code` comme contextes distincts;
+- utilise `UNIQUE NULLS NOT DISTINCT`;
+- reconstruit l'index de rapprochement HALT sur `(symbol, market, halt_date, halt_time)`;
+- ajoute un index sur `resumption_reason_code`;
+- valide l'absence de doublons selon la nouvelle identité;
+- valide qu'une observation ne possède pas simultanément les deux reason fields à `NULL`.
+
+La migration 007 a été appliquée avec succès en DEV le 2026-09-06.
 
 ---
 
@@ -325,6 +344,7 @@ market
 halt_date
 halt_time
 reason_code
+resumption_reason_code
 resumption_date
 resumption_quote_time
 resumption_trade_time
@@ -537,7 +557,7 @@ La sémantique précise du fuseau horaire Nasdaq reste à formaliser avant certa
 
 ---
 
-## 16. Persistance PostgreSQL V1.2
+## 16. Persistance PostgreSQL V1.3
 
 Module :
 
@@ -548,7 +568,7 @@ collectors/nasdaq_halts/src/nasdaq_postgresql.py
 Version :
 
 ```text
-VERSION = "1.2"
+VERSION = "1.3.2"
 ```
 
 Utilisé notamment par :
@@ -612,16 +632,23 @@ RAW unchanged : 68072
 
 ---
 
-## 18. Writer RESUMPTION V1.2
+## 18. Writer RESUMPTION V1.3
 
 Le writer `raw.nasdaq_resumption` :
 
 - conserve les observations distinctes;
+- accepte un contexte HALT `reason_code` optionnel;
+- accepte un contexte de reprise `resumption_reason_code` optionnel;
+- exige qu'au moins un des deux contextes de raison soit présent;
 - ignore les événements sans `resumption_date`;
 - déduplique en mémoire;
-- utilise `ON CONFLICT`;
+- utilise `ON CONFLICT` sur l'identité V1.3 à neuf champs;
 - s'appuie sur `UNIQUE NULLS NOT DISTINCT`;
 - conserve les observations invalides comme provenance.
+
+Le chemin dédié `persist_nasdaq_resumptions()` acquiert le même advisory lock que la persistance HALT,
+persiste les observations `resumedate`, puis enrichit les HALTs RAW et épisodes CORE existants.
+Il ne crée pas un HALT à partir du seul flux `resumedate` et ne remplace jamais le `reason_code` du HALT.
 
 Réexécution complète validée :
 
@@ -1026,9 +1053,32 @@ PowerShell 7 sera évalué séparément après stabilisation de ce checkpoint.
 État validé :
 
 ```text
-Data Model V1.2
-PostgreSQL Persistence V1.2
+Data Model V1.3
+PostgreSQL Persistence V1.3.2
+Migration 007 appliquée en DEV
 ```
+
+Le backfill historique `resumedate` 2020-2026 est terminé au 2026-09-06.
+
+Checkpoint du corpus complémentaire :
+
+```text
+Fichiers XML             : 2 435
+Observations XML         : 69 211
+Identités V1.3 uniques   : 68 195
+Observations dupliquées  : 1 016
+```
+
+État DEV après backfill et non-régression :
+
+```text
+raw.nasdaq_trade_halt          : 68107
+raw.nasdaq_resumption          : 136365
+core.nasdaq_halt_episode       : 68017
+core.nasdaq_halt_episode_event : 68072
+```
+
+`raw.nasdaq_resumption` contient les contextes HALT historiques et RESUMPTION du corpus `resumedate`; son total n'est donc pas un nombre d'épisodes CORE.
 
 Validations :
 
@@ -1047,6 +1097,13 @@ Invalid-resumption preservation    : PASS
 QVCG regression                    : PASS
 BCARU historical fixture           : PASS
 Fractional timestamps              : PASS
+Historical resumedate backfill        : PASS
+V1.3 resumption idempotence           : PASS
+V1.3 SQL non-regression               : PASS
+V1.3.1 normal loader rollback         : PASS
+GPUS integration                      : PASS
+Analytics tests                       : 69/69 PASS
+Complete test suite                   : 70/70 PASS
 ```
 
 Travaux encore ouverts :
@@ -1063,3 +1120,42 @@ Travaux encore ouverts :
 Le champ `core.nasdaq_halt_episode.market` reste physiquement nullable, même si les données validées actuelles ne contiennent pas de `NULL`.
 
 Comme `market` participe à l'identité CORE V1.2, un futur durcissement vers `NOT NULL` pourra être envisagé par migration dédiée après validation explicite.
+
+
+---
+
+## 36. Cas de référence GPUS — V1.3
+
+GPUS valide la nécessité de séparer les deux contextes de raison :
+
+```text
+symbol                  : GPUS
+market RAW              : A
+market CORE             : AMEX
+halt_start              : 2026-08-14 14:15:13.698
+HALT reason_code        : H11
+resumption_reason_code  : T3
+halt_end                : 2026-08-25 09:00:00
+halt_close_status       : MULTI_DAY
+CORE episodes           : 1
+```
+
+Le flux `haltdate` fournissait le HALT H11 sans reprise.
+Le flux complémentaire `resumedate` a fourni la reprise T3.
+La persistance V1.3.2 a enrichi le RAW et le CORE existants sans modifier le motif H11 et sans créer un second épisode.
+
+---
+
+## 37. Limitation historique connue — reason_code final
+
+Certains snapshots historiques `haltdate` peuvent contenir l'état/action final observé plutôt que le motif HALT initial. Certains épisodes CORE historiques portent donc notamment `T3` dans `reason_code`.
+
+Ces épisodes sont conservés. V1.3 ne lance pas de reconstruction globale des motifs HALT historiques; cette reconstruction constitue un chantier distinct.
+
+Règle analytique V1.3 :
+
+```text
+ALL = tous les épisodes CORE admissibles
+```
+
+Lorsque `ALL` est sélectionné, aucun prédicat `reason_code` ne doit être appliqué. Les épisodes historiques portant `T3` restent donc inclus dans les analyses globales.

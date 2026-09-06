@@ -2,9 +2,9 @@
 
 ## ARCHITECTURE.md
 
-**Version : V1.2**
+**Version : V1.3**
 **Statut : Architecture de référence du collecteur Nasdaq Halts**  
-**Dernière mise à jour : 2026-09-05**
+**Dernière mise à jour : 2026-09-06**
 
 ---
 
@@ -84,7 +84,7 @@ Les données RAW, processed et logs sont locales et exclues de Git.
 
 ---
 
-## 3. Architecture logique V1.2
+## 3. Architecture logique V1.3
 
 ### 3.1 Historique
 
@@ -198,13 +198,23 @@ python -m collectors.nasdaq_halts.src.nasdaq_historical_collector `
   --end-date YYYY-MM-DD
 ```
 
-Valeurs de référence :
+Valeurs de référence V0.5.1 :
 
 ```text
-delay-seconds       : 5
+delay-seconds       : 2
 max-retries         : 3
-retry-delay-seconds : 10
+retry #2            : 5 secondes
+retry #3            : 10 secondes
 ```
+
+Le collecteur supporte deux vues historiques complémentaires :
+
+```text
+--feed halts        -> haltdate
+--feed resumptions  -> resumedate
+```
+
+Les checkpoints sont séparés par flux et par plage de dates.
 
 Un RSS XML valide contenant zéro HALT est considéré comme une acquisition valide.
 
@@ -219,6 +229,15 @@ Historique :
 ```text
 data/raw/nasdaq/historical/tradehalts_YYYY-MM-DD.xml
 ```
+
+Historique des reprises (`resumedate`) :
+
+```text
+data/raw/nasdaq/historical/resumptions/resumptions_YYYY-MM-DD.xml
+```
+
+Les deux corpus sont complémentaires : `haltdate` décrit le contexte HALT, tandis que
+`resumedate` peut fournir une information de reprise absente du corpus `haltdate`.
 
 Live :
 
@@ -272,7 +291,22 @@ Responsabilités :
 - construction de `halt_start` et `halt_end`;
 - conservation de `source_file`;
 - préservation des fractions de seconde;
-- support des différences `Mkt` / `Market`.
+- support des différences `Mkt` / `Market`;
+- interprétation explicite du contexte source via `source_type`.
+
+Règle V1.3 :
+
+```text
+source_type = halt
+XML ReasonCode -> reason_code
+resumption_reason_code -> NULL
+
+source_type = resumption
+XML ReasonCode -> resumption_reason_code
+reason_code -> NULL
+```
+
+Un code provenant de `resumedate` ne doit jamais être réinterprété silencieusement comme motif du HALT.
 
 Les timestamps fractionnaires sont préservés à travers :
 
@@ -344,7 +378,7 @@ Cette distinction évite de perdre des observations partielles ou complètes dif
 
 ---
 
-## 8. Modèle PostgreSQL V1.2
+## 8. Modèle PostgreSQL V1.3
 
 Objets principaux :
 
@@ -391,6 +425,7 @@ market
 halt_date
 halt_time
 reason_code
+resumption_reason_code
 resumption_date
 resumption_quote_time
 resumption_trade_time
@@ -525,7 +560,7 @@ Le writer valide notamment :
 
 ---
 
-## 11. Persistance PostgreSQL V1.2
+## 11. Persistance PostgreSQL V1.3
 
 Module :
 
@@ -536,7 +571,7 @@ src/nasdaq_postgresql.py
 Version :
 
 ```text
-VERSION = "1.2"
+VERSION = "1.3.2"
 ```
 
 Chemin de production :
@@ -774,6 +809,7 @@ Migrations actuelles :
 004_update_nasdaq_core_natural_key_v1_1.sql
 005_create_nasdaq_resumption.sql
 006_nasdaq_persistence_v1_2.sql
+007_nasdaq_resumption_reason_v1_3.sql
 ```
 
 Deux migrations historiques portent le préfixe `002`.
@@ -803,7 +839,71 @@ Une copie de test de la migration a été exécutée complètement en DEV avec `
 
 ---
 
-## 18. Validation historique complète V1.2
+## 18. Évolution V1.3 — HALT reason vs RESUMPTION reason
+
+La V1.3 corrige une ambiguïté révélée par le cas GPUS.
+
+Cas de référence :
+
+```text
+GPUS / AMEX
+HALT start             : 2026-08-14 14:15:13.698
+HALT reason_code       : H11
+RESUMPTION             : 2026-08-25 09:00:00
+resumption_reason_code : T3
+CORE episodes          : 1
+```
+
+La migration :
+
+```text
+database/migrations/007_nasdaq_resumption_reason_v1_3.sql
+```
+
+ajoute `resumption_reason_code`, rend `raw.nasdaq_resumption.reason_code` nullable
+et définit l'identité d'observation V1.3 sur les neuf champs incluant les deux contextes de raison.
+
+La persistance V1.3.2 ajoute un chemin dédié :
+
+```text
+persist_nasdaq_resumptions()
+```
+
+Ce chemin :
+
+- persiste les observations `resumedate`;
+- enrichit un HALT RAW existant par `(symbol, market, halt_date, halt_time)`;
+- enrichit CORE par la relation `core.nasdaq_halt_episode_event`;
+- ne crée jamais un nouveau HALT à partir du seul flux `resumedate`;
+- ne remplace jamais le `reason_code` du HALT par le `resumption_reason_code`;
+- ignore les reprises temporellement impossibles pour l'enrichissement canonique;
+- reste idempotent.
+
+Le loader V1.3 supporte :
+
+```text
+--include-resumptions
+--resumptions-only
+```
+
+Le backfill historique `resumedate` est effectué année par année à partir des XML immuables.
+Au 2026-09-06, le backfill 2020-2026 est terminé.
+
+Checkpoint final `resumedate` :
+
+```text
+Fichiers XML             : 2 435
+Observations XML         : 69 211
+Identités V1.3 uniques   : 68 195
+Observations dupliquées  : 1 016
+```
+
+La seconde passe complète sur corpus statique a confirmé l'idempotence :
+`RESUMPTION inserted : 0`.
+
+---
+
+## 19. Validation historique complète V1.2
 
 Plage :
 
@@ -847,7 +947,7 @@ Le corpus historique complet a permis de remplacer plusieurs hypothèses V1.1 pa
 
 ---
 
-## 19. Idempotence V1.2
+## 20. Idempotence V1.2
 
 Réexécution historique complète de référence :
 
@@ -875,7 +975,7 @@ Ce résultat constitue le checkpoint d’idempotence séquentielle V1.2.
 
 ---
 
-## 20. BCARU — fixture historique
+## 21. BCARU — fixture historique
 
 Le test BCARU ne repose plus sur un total cumulatif susceptible de changer avec les nouvelles collectes.
 
@@ -925,7 +1025,7 @@ Les données officielles BCARU ont confirmé :
 
 ---
 
-## 21. Intégrité référentielle
+## 22. Intégrité référentielle
 
 Après la persistance V1.2, les validations suivantes retournent zéro anomalie :
 
@@ -940,7 +1040,7 @@ Ces validations sont également intégrées à la migration 006.
 
 ---
 
-## 22. Données processed
+## 23. Données processed
 
 Les CSV restent dérivés :
 
@@ -966,7 +1066,7 @@ Ils ne constituent pas la source d’intégration PostgreSQL.
 
 ---
 
-## 23. Métriques
+## 24. Métriques
 
 Les définitions métier sont maintenues dans :
 
@@ -994,7 +1094,7 @@ doit utiliser un calendrier de marché correctement défini.
 
 ---
 
-## 24. Loader CSV transitoire
+## 25. Loader CSV transitoire
 
 Module :
 
@@ -1021,7 +1121,7 @@ avec conservation séparée des observations de reprise.
 
 ---
 
-## 25. Encodage
+## 26. Encodage
 
 Le dépôt contient :
 
@@ -1049,7 +1149,7 @@ Cette règle a été ajoutée après qu’un BOM a provoqué une erreur de synta
 
 ---
 
-## 26. Limites et travaux restants
+## 27. Limites et travaux restants
 
 La persistance V1.2 est stabilisée en DEV.
 
@@ -1072,7 +1172,7 @@ Les validations de l’historique 2020-2026, de l’identité RAW V1.2, de l’i
 
 ---
 
-## 27. Gouvernance documentaire
+## 28. Gouvernance documentaire
 
 | Changement | Document |
 |---|---|
@@ -1088,10 +1188,10 @@ Toute modification de logique ou de modèle doit être documentée avec le code 
 
 ---
 
-## 28. État
+## 29. État
 
 ```text
-V1.2 — POSTGRESQL PERSISTENCE STABILIZED
+V1.3 — RESUMPTION SEMANTICS / HISTORICAL BACKFILL COMPLETE
 ```
 
 Checkpoint validé :
@@ -1111,6 +1211,52 @@ Concurrence advisory lock PASS
 Migration 006 rollback test PASS
 ```
 
-La V1.2 constitue désormais l’architecture de référence du collecteur Nasdaq Halts en DEV.
+La V1.3 constitue désormais l’architecture de référence du collecteur Nasdaq Halts en DEV.
+
+Limitation historique connue : certains anciens épisodes CORE portent un `reason_code` correspondant à un état/action de reprise, notamment `T3`, lorsque le snapshot historique `haltdate` ne conservait pas le motif HALT initial. Ces épisodes sont conservés; leur reconstruction historique constitue un chantier distinct.
+
+Règle analytique : `ALL` doit retourner tous les épisodes CORE admissibles sans filtre sur `reason_code`, y compris les épisodes historiques portant `T3`.
 
 Les prochaines étapes portent principalement sur la couche analytics, le calendrier de marché, l’exploitation centralisée et la préparation des environnements futurs.
+
+
+---
+
+## 30. Checkpoint V1.3 au 2026-09-06
+
+Validé :
+
+```text
+Migration 007 appliquée en DEV
+Parser halt/resumption séparé
+GPUS H11 -> T3 validé
+Persistance resumption V1.3.2 validée
+Enrichissement RAW/CORE validé
+Idempotence du fichier resumedate 2026-08-25 validée
+Collecteur historique V0.5.1 validé
+Août 2026 resumedate collecté sans échec final
+```
+
+Complété :
+
+```text
+Backfill historique resumedate 2020-2026
+2 435 XML resumedate
+69 211 observations XML
+68 195 identités V1.3 uniques
+1 016 observations source dupliquées
+Idempotence globale PASS
+Non-régression SQL PASS
+Loader normal V1.3.1 sous ROLLBACK PASS
+GPUS integration PASS
+Analytics 69/69 PASS
+Suite complète 70/70 PASS
+```
+
+À finaliser :
+
+```text
+Commit / push V1.3
+Correction GUI ALL
+Référence ⓘ des reason codes HALT / RESUMPTION
+```

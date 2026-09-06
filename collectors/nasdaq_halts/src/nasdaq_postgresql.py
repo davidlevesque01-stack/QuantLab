@@ -7,10 +7,10 @@ from shared.database import get_connection
 
 # ============================================================
 # QuantLab - Nasdaq PostgreSQL Persistence
-# VERSION 1.2
+# VERSION 1.3.2
 # ============================================================
 
-VERSION = "1.2"
+VERSION = "1.3.2"
 
 ALLOWED_HALT_CLOSE_STATUS = {
     "YES",
@@ -26,7 +26,7 @@ ALLOWED_HALT_CLOSE_STATUS = {
 
 def empty_to_none(value: Any):
     """
-    Convertit les chaînes vides en None.
+    Convertit les chaÃ®nes vides en None.
     """
 
     if value is None:
@@ -68,12 +68,12 @@ def parse_time(value):
     """
     Convertit une heure Nasdaq en time Python.
 
-    Les données Nasdaq peuvent contenir des espaces avant
+    Les donnÃ©es Nasdaq peuvent contenir des espaces avant
     les fractions de seconde, par exemple :
 
         08:52:20                      .892
 
-    Les espaces sont retirés sans perdre la précision.
+    Les espaces sont retirÃ©s sans perdre la prÃ©cision.
     """
 
     value = empty_to_none(value)
@@ -96,7 +96,7 @@ def parse_time(value):
 
 def parse_decimal(value):
     """
-    Convertit une valeur numérique en Decimal.
+    Convertit une valeur numÃ©rique en Decimal.
     """
 
     value = empty_to_none(value)
@@ -111,7 +111,7 @@ def parse_decimal(value):
 
 def parse_halt_close_status(value):
     """
-    Valide le statut d'un épisode à la clôture.
+    Valide le statut d'un Ã©pisode Ã  la clÃ´ture.
     """
 
     value = empty_to_none(value)
@@ -138,9 +138,9 @@ def prefer_new_value(
     incoming_value
 ):
     """
-    Retourne la valeur à conserver.
+    Retourne la valeur Ã  conserver.
 
-    Règles V0.8 :
+    RÃ¨gles V0.8 :
 
         NULL -> NULL       : conserve NULL
         NULL -> valeur     : prend la nouvelle valeur
@@ -149,7 +149,7 @@ def prefer_new_value(
         valeur A -> B      : prend B
 
     Une observation Nasdaq vide ne peut donc jamais effacer
-    une information déjà connue.
+    une information dÃ©jÃ  connue.
     """
 
     if incoming_value is None:
@@ -163,19 +163,19 @@ def prefer_close_status(
     incoming_status
 ):
     """
-    Retourne le statut de clôture à conserver.
+    Retourne le statut de clÃ´ture Ã  conserver.
 
-    UNKNOWN est considéré comme moins informatif qu'un statut
-    final déjà connu.
+    UNKNOWN est considÃ©rÃ© comme moins informatif qu'un statut
+    final dÃ©jÃ  connu.
 
     Ainsi :
 
         YES/MULTI_DAY/NO -> UNKNOWN
 
-    ne provoque pas de régression.
+    ne provoque pas de rÃ©gression.
 
     Un nouveau statut final peut toutefois corriger un statut
-    final précédent si les nouvelles données Nasdaq le justifient.
+    final prÃ©cÃ©dent si les nouvelles donnÃ©es Nasdaq le justifient.
     """
 
     if incoming_status is None:
@@ -196,26 +196,26 @@ def prefer_close_status(
 
 
 # ============================================================
-# IDENTITÉ RAW
+# IDENTITÃ‰ RAW
 # ============================================================
 
 def get_raw_natural_key(event):
     """
-    Retourne la clé naturelle PostgreSQL d'un événement RAW.
+    Retourne la clÃ© naturelle PostgreSQL d'un Ã©vÃ©nement RAW.
 
-    Cette clé correspond à la contrainte UNIQUE de :
+    Cette clÃ© correspond Ã  la contrainte UNIQUE de :
 
         raw.nasdaq_trade_halt
 
-    Clé V1.2 :
+    ClÃ© V1.2 :
         symbol
         halt_date
         halt_time
         reason_code
         market
 
-    Les champs resumption_* ne font PAS partie de l'identité
-    du HALT. Les observations de reprise sont persistées dans
+    Les champs resumption_* ne font PAS partie de l'identitÃ©
+    du HALT. Les observations de reprise sont persistÃ©es dans
     raw.nasdaq_resumption.
     """
 
@@ -277,11 +277,11 @@ def find_source_event_for_episode(
     unique_events
 ):
     """
-    Trouve l'événement RAW qui correspond à un épisode.
+    Trouve l'Ã©vÃ©nement RAW qui correspond Ã  un Ã©pisode.
 
     Pour la V0.8, la relation demeure strictement 1:1.
 
-    Un épisode doit correspondre exactement à un événement
+    Un Ã©pisode doit correspondre exactement Ã  un Ã©vÃ©nement
     selon :
 
         symbol
@@ -290,11 +290,11 @@ def find_source_event_for_episode(
         halt_start
         halt_end
 
-    Si aucun événement ou plusieurs événements correspondent,
-    l'écriture est interrompue.
+    Si aucun Ã©vÃ©nement ou plusieurs Ã©vÃ©nements correspondent,
+    l'Ã©criture est interrompue.
 
-    Cette stratégie demeure volontairement stricte afin de
-    détecter si le modèle 1 RAW -> 1 CORE cesse d'être valide.
+    Cette stratÃ©gie demeure volontairement stricte afin de
+    dÃ©tecter si le modÃ¨le 1 RAW -> 1 CORE cesse d'Ãªtre valide.
     """
 
     candidates = []
@@ -372,15 +372,15 @@ MARKET_ALIASES = {
 
 def normalize_market(market):
     """
-    Normalise les codes de marché Nasdaq utilisés par les flux RAW.
+    Normalise les codes de marchÃ© Nasdaq utilisÃ©s par les flux RAW.
 
-    Les alias connus sont regroupés ainsi :
+    Les alias connus sont regroupÃ©s ainsi :
 
         Q / NASDAQ -> NASDAQ
         N / NYSE   -> NYSE
         A / AMEX   -> AMEX
 
-    Les autres codes sont conservés tels quels.
+    Les autres codes sont conservÃ©s tels quels.
     """
 
     market = empty_to_none(market)
@@ -399,14 +399,14 @@ def _build_episode_event_groups(unique_events):
     Reconstruit les groupes RAW exactement selon la logique de
     build_halt_episodes() V1.2.
 
-    Identité CORE :
-        symbol + market normalisé + période HALT continue.
+    IdentitÃ© CORE :
+        symbol + market normalisÃ© + pÃ©riode HALT continue.
 
-    Le reason_code ne sépare jamais les épisodes.
+    Le reason_code ne sÃ©pare jamais les Ã©pisodes.
 
-    Un HALT ouvert reste ouvert jusqu'à l'observation d'une
-    halt_end valide. NULL et les fins antérieures au halt_start
-    ne ferment donc jamais l'épisode.
+    Un HALT ouvert reste ouvert jusqu'Ã  l'observation d'une
+    halt_end valide. NULL et les fins antÃ©rieures au halt_start
+    ne ferment donc jamais l'Ã©pisode.
     """
 
     from collections import defaultdict
@@ -503,9 +503,9 @@ def _prepare_episode_raw_groups(
     raw_ids,
 ):
     """
-    Associe chaque épisode CORE aux événements RAW qui le composent.
+    Associe chaque Ã©pisode CORE aux Ã©vÃ©nements RAW qui le composent.
 
-    La correspondance est reconstruite à partir de la même logique
+    La correspondance est reconstruite Ã  partir de la mÃªme logique
     de regroupement que build_halt_episodes().
 
     Retourne une liste de dictionnaires :
@@ -668,7 +668,7 @@ def _prepare_episode_raw_groups(
 
 
 # ============================================================
-# ÉCRITURE RAW
+# Ã‰CRITURE RAW
 # ============================================================
 
 def write_trade_halts(
@@ -676,23 +676,23 @@ def write_trade_halts(
     unique_events
 ):
     """
-    Écrit les événements Nasdaq dans :
+    Ã‰crit les Ã©vÃ©nements Nasdaq dans :
 
         raw.nasdaq_trade_halt
 
     V0.9-A :
     - lookup des natural keys en batch;
     - classification INSERT / UPDATE / UNCHANGED en Python;
-    - INSERT SQL réellement batché;
-    - UPDATE SQL réellement batché;
-    - récupération des IDs avec RETURNING;
-    - conservation des règles métier V0.8.
+    - INSERT SQL rÃ©ellement batchÃ©;
+    - UPDATE SQL rÃ©ellement batchÃ©;
+    - rÃ©cupÃ©ration des IDs avec RETURNING;
+    - conservation des rÃ¨gles mÃ©tier V0.8.
 
     Les valeurs NULL entrantes n'effacent jamais une valeur
     existante.
 
-    source_file représente le premier snapshot ayant créé
-    l'événement RAW et n'est donc pas modifié lors d'un UPDATE.
+    source_file reprÃ©sente le premier snapshot ayant crÃ©Ã©
+    l'Ã©vÃ©nement RAW et n'est donc pas modifiÃ© lors d'un UPDATE.
 
     Retourne :
 
@@ -717,7 +717,7 @@ def write_trade_halts(
         )
 
     # ========================================================
-    # 1. PRÉPARATION ET VALIDATION
+    # 1. PRÃ‰PARATION ET VALIDATION
     # ========================================================
 
     prepared_by_key = {}
@@ -770,11 +770,11 @@ def write_trade_halts(
         )
 
         # ----------------------------------------------------
-        # QUALITÉ DE L'OBSERVATION DE REPRISE
+        # QUALITÃ‰ DE L'OBSERVATION DE REPRISE
         # ----------------------------------------------------
         #
         # Rang 2 :
-        #     reprise complète et chronologiquement valide.
+        #     reprise complÃ¨te et chronologiquement valide.
         #
         # Rang 1 :
         #     information de reprise partielle, par exemple
@@ -784,8 +784,8 @@ def write_trade_halts(
         #     aucune reprise exploitable ou observation
         #     impossible avec halt_end < halt_start.
         #
-        # Les champs de reprise sont sélectionnés comme un bloc
-        # afin de ne jamais mélanger plusieurs snapshots Nasdaq.
+        # Les champs de reprise sont sÃ©lectionnÃ©s comme un bloc
+        # afin de ne jamais mÃ©langer plusieurs snapshots Nasdaq.
         # ----------------------------------------------------
 
         if (
@@ -1042,7 +1042,7 @@ def write_trade_halts(
     ]
 
     # 5 colonnes de natural key.
-    # 5 000 × 5 = 25 000 paramètres.
+    # 5 000 Ã— 5 = 25 000 paramÃ¨tres.
     LOOKUP_BATCH_SIZE = 5000
 
     with conn.cursor() as cur:
@@ -1161,7 +1161,7 @@ def write_trade_halts(
         )
 
         # ----------------------------------------------------
-        # NOUVEL ÉVÉNEMENT
+        # NOUVEL Ã‰VÃ‰NEMENT
         # ----------------------------------------------------
 
         if existing is None:
@@ -1182,7 +1182,7 @@ def write_trade_halts(
         ] = raw_id
 
         # ----------------------------------------------------
-        # RÈGLES V0.8
+        # RÃˆGLES V0.8
         # ----------------------------------------------------
 
         desired_issue_name = (
@@ -1296,7 +1296,7 @@ def write_trade_halts(
             unchanged += 1
 
         # V0.8 :
-        # existing_source_file est volontairement conservé.
+        # existing_source_file est volontairement conservÃ©.
         _ = existing["source_file"]
 
     # ========================================================
@@ -1434,7 +1434,7 @@ def write_trade_halts(
     # ========================================================
     #
     # UPDATE via VALUES permet un seul appel SQL par lot.
-    # loaded_at n'est volontairement PAS modifié.
+    # loaded_at n'est volontairement PAS modifiÃ©.
     #
 
     UPDATE_BATCH_SIZE = 5000
@@ -1562,7 +1562,7 @@ def write_trade_halts(
 
 
 # ============================================================
-# ÉCRITURE RESUMPTIONS
+# Ã‰CRITURE RESUMPTIONS
 # ============================================================
 
 def write_resumptions(conn, unique_events):
@@ -1570,8 +1570,13 @@ def write_resumptions(conn, unique_events):
     Persiste les observations de reprise Nasdaq dans
     raw.nasdaq_resumption.
 
-    Une même identité de HALT peut avoir plusieurs observations
-    de resumption.
+    V1.3 :
+    - reason_code conserve, lorsqu'il est connu, le code du HALT;
+    - resumption_reason_code conserve le ReasonCode provenant
+      explicitement d'un flux Nasdaq resumedate;
+    - le code de reprise ne devient jamais un reason_code HALT;
+    - une mÃªme identitÃ© de HALT peut avoir plusieurs observations
+      de reprise.
     """
 
     if not unique_events:
@@ -1582,23 +1587,53 @@ def write_resumptions(conn, unique_events):
 
     for event in unique_events:
         halt_start = event.get("halt_start")
+
         if halt_start is None:
             raise ValueError(
                 "Resumption event has no halt_start: "
                 f"{event}"
             )
 
-        resumption_date = parse_date(event.get("resumption_date"))
+        resumption_date = parse_date(
+            event.get("resumption_date")
+        )
+
         if resumption_date is None:
             continue
 
-        symbol = empty_to_none(event.get("symbol"))
-        market = empty_to_none(event.get("market"))
-        reason_code = empty_to_none(event.get("reason_code"))
+        symbol = empty_to_none(
+            event.get("symbol")
+        )
 
-        if symbol is None or market is None or reason_code is None:
+        market = empty_to_none(
+            event.get("market")
+        )
+
+        halt_reason_code = empty_to_none(
+            event.get("reason_code")
+        )
+
+        resumption_reason_code = empty_to_none(
+            event.get("resumption_reason_code")
+        )
+
+        if symbol is None or market is None:
             raise ValueError(
                 "Incomplete resumption identity: "
+                f"{event}"
+            )
+
+        # Au moins un contexte de raison doit Ãªtre prÃ©sent.
+        # Pour les anciens flux haltdate, reason_code contient
+        # le HALT reason. Pour les nouveaux flux resumedate,
+        # resumption_reason_code contient le code de reprise.
+        if (
+            halt_reason_code is None
+            and resumption_reason_code is None
+        ):
+            raise ValueError(
+                "Resumption observation has neither HALT "
+                "reason_code nor resumption_reason_code: "
                 f"{event}"
             )
 
@@ -1607,14 +1642,40 @@ def write_resumptions(conn, unique_events):
             market,
             halt_start.date(),
             halt_start.time(),
-            reason_code,
+            halt_reason_code,
+            resumption_reason_code,
             resumption_date,
-            parse_time(event.get("resumption_quote_time")),
-            parse_time(event.get("resumption_trade_time")),
-            empty_to_none(event.get("source_file")),
+            parse_time(
+                event.get("resumption_quote_time")
+            ),
+            parse_time(
+                event.get("resumption_trade_time")
+            ),
+            empty_to_none(
+                event.get("source_file")
+            ),
         )
 
-        key = row[:8]
+        # IdentitÃ© V1.3 de l'observation de reprise.
+        #
+        # Les deux contextes de raison sont conservÃ©s sÃ©parÃ©ment :
+        # - reason_code : contexte HALT, lorsqu'il est connu;
+        # - resumption_reason_code : code du flux resumedate.
+        #
+        # Inclure les deux dans l'identitÃ© RAW Ã©vite de fusionner
+        # silencieusement deux observations source distinctes.
+        key = (
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+            row[6],
+            row[7],
+            row[8],
+        )
+
         if key not in seen:
             seen.add(key)
             rows.append(row)
@@ -1633,18 +1694,23 @@ def write_resumptions(conn, unique_events):
                 halt_date,
                 halt_time,
                 reason_code,
+                resumption_reason_code,
                 resumption_date,
                 resumption_quote_time,
                 resumption_trade_time,
                 source_file
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
             ON CONFLICT (
                 symbol,
                 market,
                 halt_date,
                 halt_time,
                 reason_code,
+                resumption_reason_code,
                 resumption_date,
                 resumption_quote_time,
                 resumption_trade_time
@@ -1652,13 +1718,276 @@ def write_resumptions(conn, unique_events):
             """,
             rows,
         )
+
         inserted = cur.rowcount
 
     return inserted, len(rows) - inserted
 
 
 # ============================================================
-# ÉCRITURE CORE
+# ENRICHISSEMENT HALT / CORE DEPUIS RESUMPTIONS
+# ============================================================
+
+def enrich_halts_from_resumptions(conn):
+    """
+    Enrichit les HALT RAW et les Ã©pisodes CORE Ã  partir des
+    observations persistÃ©es dans raw.nasdaq_resumption.
+
+    RÃ¨gles V1.3.2 :
+    - rapprochement RAW par symbol + market + halt_date + halt_time;
+    - reason_code HALT n'est jamais remplacÃ© par un code de reprise;
+    - parmi plusieurs observations de reprise valides, la reprise
+      chronologiquement la plus tardive est retenue;
+    - une reprise antÃ©rieure au halt_start est ignorÃ©e pour
+      l'enrichissement canonique mais reste conservÃ©e en RAW;
+    - CORE est enrichi via core.nasdaq_halt_episode_event, donc sans
+      dÃ©pendre des alias de marchÃ© RAW (A) / CORE (AMEX);
+    - un Ã©pisode multi-jour devient MULTI_DAY;
+    - pour une reprise le mÃªme jour, le statut de clÃ´ture existant
+      est conservÃ© afin de ne pas reproduire ici la logique complÃ¨te
+      du calendrier de marchÃ©.
+
+    Retourne :
+        raw_updated, core_updated
+    """
+
+    with conn.cursor() as cur:
+        # ----------------------------------------------------
+        # 1. RAW HALT
+        # ----------------------------------------------------
+        # Une seule observation canonique est sÃ©lectionnÃ©e par HALT.
+        # La date/heure de trade est prÃ©fÃ©rÃ©e Ã  l'heure de quote pour
+        # le classement, comme ailleurs dans la persistance Nasdaq.
+        cur.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    r.symbol,
+                    r.market,
+                    r.halt_date,
+                    r.halt_time,
+                    r.resumption_date,
+                    r.resumption_quote_time,
+                    r.resumption_trade_time,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY
+                            r.symbol,
+                            r.market,
+                            r.halt_date,
+                            r.halt_time
+                        ORDER BY
+                            (
+                                r.resumption_date
+                                + COALESCE(
+                                    r.resumption_trade_time,
+                                    r.resumption_quote_time
+                                )
+                            ) DESC,
+                            r.id DESC
+                    ) AS rn
+                FROM raw.nasdaq_resumption r
+                WHERE COALESCE(
+                          r.resumption_trade_time,
+                          r.resumption_quote_time
+                      ) IS NOT NULL
+                  AND (
+                          r.resumption_date
+                          + COALESCE(
+                              r.resumption_trade_time,
+                              r.resumption_quote_time
+                          )
+                      ) >= (
+                          r.halt_date
+                          + r.halt_time
+                      )
+            ), canonical AS (
+                SELECT *
+                FROM ranked
+                WHERE rn = 1
+            )
+            UPDATE raw.nasdaq_trade_halt h
+            SET
+                resumption_date = c.resumption_date,
+                resumption_quote_time = c.resumption_quote_time,
+                resumption_trade_time = c.resumption_trade_time
+            FROM canonical c
+            WHERE h.symbol = c.symbol
+              AND h.market = c.market
+              AND h.halt_date = c.halt_date
+              AND h.halt_time = c.halt_time
+              AND (
+                    h.resumption_date IS DISTINCT FROM c.resumption_date
+                 OR h.resumption_quote_time
+                        IS DISTINCT FROM c.resumption_quote_time
+                 OR h.resumption_trade_time
+                        IS DISTINCT FROM c.resumption_trade_time
+              );
+            """
+        )
+
+        raw_updated = cur.rowcount
+
+        # ----------------------------------------------------
+        # 2. CORE
+        # ----------------------------------------------------
+        # CORE est reliÃ© au RAW par la table de relation. On prend
+        # la fin valide la plus tardive parmi les RAW de l'Ã©pisode.
+        cur.execute(
+            """
+            WITH candidate AS (
+                SELECT
+                    ep.id AS episode_id,
+                    ep.halt_start,
+                    MAX(
+                        h.resumption_date
+                        + COALESCE(
+                            h.resumption_trade_time,
+                            h.resumption_quote_time
+                        )
+                    ) AS halt_end_new
+                FROM core.nasdaq_halt_episode ep
+                JOIN core.nasdaq_halt_episode_event rel
+                  ON rel.episode_id = ep.id
+                JOIN raw.nasdaq_trade_halt h
+                  ON h.id = rel.trade_halt_id
+                WHERE h.resumption_date IS NOT NULL
+                  AND COALESCE(
+                          h.resumption_trade_time,
+                          h.resumption_quote_time
+                      ) IS NOT NULL
+                GROUP BY
+                    ep.id,
+                    ep.halt_start
+            ), desired AS (
+                SELECT
+                    episode_id,
+                    halt_start,
+                    halt_end_new,
+                    EXTRACT(
+                        EPOCH FROM (
+                            halt_end_new - halt_start
+                        )
+                    ) / 60.0 AS duration_minutes_new
+                FROM candidate
+                WHERE halt_end_new >= halt_start
+            )
+            UPDATE core.nasdaq_halt_episode ep
+            SET
+                halt_end = d.halt_end_new,
+                duration_minutes = d.duration_minutes_new,
+                halt_close_status = CASE
+                    WHEN d.halt_end_new::date > ep.halt_start::date
+                        THEN 'MULTI_DAY'
+                    ELSE ep.halt_close_status
+                END
+            FROM desired d
+            WHERE ep.id = d.episode_id
+              AND (
+                    ep.halt_end IS NULL
+                    OR d.halt_end_new > ep.halt_end
+                    OR ep.duration_minutes IS NULL
+                    OR (
+                        d.halt_end_new::date > ep.halt_start::date
+                        AND ep.halt_close_status IS DISTINCT FROM 'MULTI_DAY'
+                    )
+              );
+            """
+        )
+
+        core_updated = cur.rowcount
+
+    return raw_updated, core_updated
+
+
+def persist_nasdaq_resumptions(resumption_events):
+    """
+    Persiste un lot provenant explicitement d'un flux Nasdaq
+    resumedate, puis enrichit les HALT RAW et les Ã©pisodes CORE
+    correspondants dans la mÃªme transaction.
+
+    Cette fonction ne crÃ©e jamais de raw.nasdaq_trade_halt Ã  partir
+    d'une observation resumedate : elle ne peut donc pas transformer
+    un code de reprise (ex. T3) en raison HALT.
+    """
+
+    print()
+    print(
+        "============================================================"
+    )
+    print(
+        f"POSTGRESQL RESUMPTION PERSISTENCE V{VERSION}"
+    )
+    print(
+        "============================================================"
+    )
+    print()
+
+    for event in resumption_events:
+        source_type = event.get("source_type")
+
+        if source_type not in (None, "resumption"):
+            raise ValueError(
+                "persist_nasdaq_resumptions received a non-resumption "
+                f"event: {source_type!r}"
+            )
+
+        if empty_to_none(
+            event.get("resumption_reason_code")
+        ) is None:
+            raise ValueError(
+                "Resumption event has no resumption_reason_code: "
+                f"{event.get('symbol')} {event.get('halt_start')}"
+            )
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 1),
+            )
+
+        (
+            resumption_inserted,
+            resumption_existing,
+        ) = write_resumptions(
+            conn,
+            resumption_events,
+        )
+
+        (
+            raw_enriched,
+            core_enriched,
+        ) = enrich_halts_from_resumptions(
+            conn
+        )
+
+    print(
+        f"RESUMPTION inserted   : {resumption_inserted}"
+    )
+    print(
+        f"RESUMPTION existing   : {resumption_existing}"
+    )
+    print(
+        f"RAW enriched          : {raw_enriched}"
+    )
+    print(
+        f"CORE enriched         : {core_enriched}"
+    )
+    print()
+    print(
+        "PostgreSQL resumption persistence completed"
+    )
+
+    return {
+        "resumption_inserted": resumption_inserted,
+        "resumption_existing": resumption_existing,
+        "raw_enriched": raw_enriched,
+        "core_enriched": core_enriched,
+    }
+
+
+# ============================================================
+# Ã‰CRITURE CORE
 # ============================================================
 
 def write_halt_episodes(
@@ -1668,33 +1997,33 @@ def write_halt_episodes(
     raw_ids
 ):
     """
-    Persiste les épisodes CORE et leurs relations CORE -> RAW.
+    Persiste les Ã©pisodes CORE et leurs relations CORE -> RAW.
 
     V1.1 PERFORMANCE :
-    - préparation CORE/RAW identique à V1.0;
+    - prÃ©paration CORE/RAW identique Ã  V1.0;
     - staging PostgreSQL temporaire;
-    - INSERT CORE en une opération SQL;
-    - UPDATE CORE en une opération SQL;
-    - INSERT/DELETE des relations CORE -> RAW en opérations SQL
+    - INSERT CORE en une opÃ©ration SQL;
+    - UPDATE CORE en une opÃ©ration SQL;
+    - INSERT/DELETE des relations CORE -> RAW en opÃ©rations SQL
       massives;
-    - aucun SELECT/UPDATE/INSERT individuel par épisode.
+    - aucun SELECT/UPDATE/INSERT individuel par Ã©pisode.
 
-    Modèle :
+    ModÃ¨le :
         1 CORE episode -> N RAW events
 
-    Clé naturelle CORE V1.2 :
+    ClÃ© naturelle CORE V1.2 :
         symbol
         market
         halt_start
 
-    reason_code est descriptif et ne fait pas partie de la clé.
+    reason_code est descriptif et ne fait pas partie de la clÃ©.
     """
 
     if not episodes:
         return (0, 0, 0)
 
     # ========================================================
-    # 1. PRÉPARATION ET VALIDATION EN MÉMOIRE
+    # 1. PRÃ‰PARATION ET VALIDATION EN MÃ‰MOIRE
     # ========================================================
 
     prepared_groups = _prepare_episode_raw_groups(
@@ -1728,16 +2057,16 @@ def write_halt_episodes(
         # V1.1 DATA QUALITY GUARD
         #
         # Certains snapshots historiques Nasdaq contiennent un
-        # resumption_time antérieur au halt_start. Le RAW doit
-        # rester fidèle à la source, mais un épisode CORE ne peut
+        # resumption_time antÃ©rieur au halt_start. Le RAW doit
+        # rester fidÃ¨le Ã  la source, mais un Ã©pisode CORE ne peut
         # pas violer chk_nasdaq_halt_end.
         #
         # Dans ce cas :
         #   - halt_end = NULL
         #   - duration_minutes = NULL
-        #   - le RAW et la relation CORE -> RAW sont conservés
-        #   - halt_at_close est conservé comme calculé par le
-        #     moteur d'épisodes.
+        #   - le RAW et la relation CORE -> RAW sont conservÃ©s
+        #   - halt_at_close est conservÃ© comme calculÃ© par le
+        #     moteur d'Ã©pisodes.
         #
         # Exemple historique connu :
         #   TPC / 2023-05-01 / 12:54:10 -> 12:53:43
@@ -1796,8 +2125,8 @@ def write_halt_episodes(
     # ========================================================
     # 2. TEMPORARY STAGING
     #
-    # Les types sont dérivés directement du schéma PostgreSQL
-    # afin de ne pas supposer int/bigint/timestamp précis.
+    # Les types sont dÃ©rivÃ©s directement du schÃ©ma PostgreSQL
+    # afin de ne pas supposer int/bigint/timestamp prÃ©cis.
     # ========================================================
 
     with conn.cursor() as cur:
@@ -1840,8 +2169,8 @@ def write_halt_episodes(
             """
         )
 
-        # executemany() est utilisé uniquement pour charger les tables
-        # temporaires. Les opérations CORE réelles restent massives.
+        # executemany() est utilisÃ© uniquement pour charger les tables
+        # temporaires. Les opÃ©rations CORE rÃ©elles restent massives.
         cur.executemany(
             """
             INSERT INTO _quantlab_core_episode_stage (
@@ -1907,7 +2236,7 @@ def write_halt_episodes(
         )
 
         # ====================================================
-        # 3. INTÉGRITÉ DE LA CLÉ CORE
+        # 3. INTÃ‰GRITÃ‰ DE LA CLÃ‰ CORE
         # ====================================================
 
         cur.execute(
@@ -2081,9 +2410,9 @@ def write_halt_episodes(
             )
 
         # ====================================================
-        # 6. SUPPRESSION DES RELATIONS OBSOLÈTES
+        # 6. SUPPRESSION DES RELATIONS OBSOLÃˆTES
         #
-        # Seulement pour les épisodes présents dans le staging.
+        # Seulement pour les Ã©pisodes prÃ©sents dans le staging.
         # ====================================================
 
         cur.execute(
@@ -2137,8 +2466,8 @@ def write_halt_episodes(
         # 8. VALIDATION RELATIONNELLE
         #
         # V1.2 :
-        # reason_code ne fait pas partie de l'identité CORE.
-        # Une relation est identifiée par :
+        # reason_code ne fait pas partie de l'identitÃ© CORE.
+        # Une relation est identifiÃ©e par :
         #
         #     symbol + market + halt_start + trade_halt_id
         #
@@ -2194,7 +2523,7 @@ def persist_nasdaq_halts(
     episodes
 ):
     """
-    Persiste une exécution Nasdaq complète dans PostgreSQL.
+    Persiste une exÃ©cution Nasdaq complÃ¨te dans PostgreSQL.
 
     Ordre transactionnel :
 
@@ -2203,7 +2532,7 @@ def persist_nasdaq_halts(
         3. CORE EPISODES / RELATIONS
 
     Toute erreur provoque le rollback de l'ensemble de
-    l'opération.
+    l'opÃ©ration.
     """
 
     print()
@@ -2220,16 +2549,16 @@ def persist_nasdaq_halts(
 
     with get_connection() as conn:
 
-        # Une seule transaction de persistance Nasdaq peut écrire
-        # simultanément dans PostgreSQL.
+        # Une seule transaction de persistance Nasdaq peut Ã©crire
+        # simultanÃ©ment dans PostgreSQL.
         #
         # Le verrou est transactionnel :
-        # - acquis avant toute lecture/écriture RAW;
-        # - conservé pendant RAW, RESUMPTION et CORE;
-        # - libéré automatiquement au COMMIT ou au ROLLBACK.
+        # - acquis avant toute lecture/Ã©criture RAW;
+        # - conservÃ© pendant RAW, RESUMPTION et CORE;
+        # - libÃ©rÃ© automatiquement au COMMIT ou au ROLLBACK.
         #
-        # Ceci élimine les races SELECT -> INSERT entre deux
-        # exécutions concurrentes sans modifier les règles
+        # Ceci Ã©limine les races SELECT -> INSERT entre deux
+        # exÃ©cutions concurrentes sans modifier les rÃ¨gles
         # d'enrichissement ou d'idempotence V1.2.
         with conn.cursor() as cur:
             cur.execute(
@@ -2266,6 +2595,13 @@ def persist_nasdaq_halts(
             raw_ids
         )
 
+        (
+            raw_enriched,
+            core_enriched,
+        ) = enrich_halts_from_resumptions(
+            conn
+        )
+
     print(
         f"RAW inserted          : {raw_inserted}"
     )
@@ -2289,6 +2625,12 @@ def persist_nasdaq_halts(
     )
     print(
         f"CORE unchanged        : {core_unchanged}"
+    )
+    print(
+        f"RAW enriched          : {raw_enriched}"
+    )
+    print(
+        f"CORE enriched         : {core_enriched}"
     )
 
     print()
@@ -2320,4 +2662,10 @@ def persist_nasdaq_halts(
 
         "core_unchanged":
             core_unchanged,
+
+        "raw_enriched":
+            raw_enriched,
+
+        "core_enriched":
+            core_enriched,
     }

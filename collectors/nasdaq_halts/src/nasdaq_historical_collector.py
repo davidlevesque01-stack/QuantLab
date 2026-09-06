@@ -1,22 +1,23 @@
-﻿import argparse
+import argparse
 import json
 import time
-
-from collectors.nasdaq_halts.src.nasdaq_paths import (
-    resolve_raw_directory,
-)
 import xml.etree.ElementTree as ET
+
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from collectors.nasdaq_halts.src.nasdaq_paths import (
+    resolve_raw_directory,
+)
+
 
 # ============================================================
 # QUANTLAB - NASDAQ HISTORICAL COLLECTOR
-# VERSION 0.4
+# VERSION 0.5
 # ============================================================
 
-VERSION = "0.4"
+VERSION = "0.5.1"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = PROJECT_ROOT / "config" / "config.json"
@@ -35,14 +36,10 @@ config = load_config()
 
 
 # ============================================================
-# RÉPERTOIRES
+# RÉPERTOIRES RAW
 # ============================================================
 
-# ============================================================
-# RÉPERTOIRE RAW
-# ============================================================
-
-RAW_DIRECTORY = (
+HISTORICAL_RAW_DIRECTORY = (
     resolve_raw_directory(
         PROJECT_ROOT,
         config,
@@ -50,7 +47,19 @@ RAW_DIRECTORY = (
     / "historical"
 )
 
-RAW_DIRECTORY.mkdir(
+HALTS_RAW_DIRECTORY = HISTORICAL_RAW_DIRECTORY
+
+RESUMPTIONS_RAW_DIRECTORY = (
+    HISTORICAL_RAW_DIRECTORY
+    / "resumptions"
+)
+
+HALTS_RAW_DIRECTORY.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+RESUMPTIONS_RAW_DIRECTORY.mkdir(
     parents=True,
     exist_ok=True,
 )
@@ -90,10 +99,24 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--feed",
+        choices=(
+            "halts",
+            "resumptions",
+        ),
+        default="halts",
+        help=(
+            "Flux Nasdaq à collecter. "
+            "'halts' utilise haltdate et demeure le défaut. "
+            "'resumptions' utilise resumedate."
+        ),
+    )
+
+    parser.add_argument(
         "--delay-seconds",
         type=float,
-        default=5.0,
-        help="Délai entre les dates. Défaut : 5 secondes.",
+        default=2.0,
+        help="Délai entre les dates. Défaut : 2 secondes.",
     )
 
     parser.add_argument(
@@ -106,10 +129,12 @@ def parse_arguments():
     parser.add_argument(
         "--retry-delay-seconds",
         type=float,
-        default=10.0,
+        default=5.0,
         help=(
-            "Délai de base entre les tentatives. "
-            "Défaut : 10 secondes."
+            "Délai avant la tentative 2. "
+            "Les tentatives suivantes utilisent un multiple "
+            "de ce délai. Défaut : 5 secondes "
+            "(5 s avant tentative 2, 10 s avant tentative 3)."
         ),
     )
 
@@ -149,23 +174,58 @@ def validate_arguments(args):
 
 
 # ============================================================
-# CHECKPOINT SPÉCIFIQUE À LA PLAGE
+# CONFIGURATION DU FLUX
 # ============================================================
 
-def get_progress_file(start_date, end_date):
+def get_feed_settings(feed):
+    if feed == "halts":
+        return {
+            "query_parameter": "haltdate",
+            "raw_directory": HALTS_RAW_DIRECTORY,
+            "filename_prefix": "tradehalts",
+            "display_name": "HALTS",
+        }
+
+    if feed == "resumptions":
+        return {
+            "query_parameter": "resumedate",
+            "raw_directory": RESUMPTIONS_RAW_DIRECTORY,
+            "filename_prefix": "resumptions",
+            "display_name": "RESUMPTIONS",
+        }
+
+    raise ValueError(
+        f"Flux non supporté : {feed}"
+    )
+
+
+# ============================================================
+# CHECKPOINT SPÉCIFIQUE À LA PLAGE ET AU FLUX
+# ============================================================
+
+def get_progress_file(
+    feed,
+    start_date,
+    end_date,
+):
     return (
         LOG_DIRECTORY
         / (
-            "historical_progress_"
+            f"historical_{feed}_progress_"
             f"{start_date.isoformat()}_"
             f"{end_date.isoformat()}.json"
         )
     )
 
 
-def create_empty_progress(start_date, end_date):
+def create_empty_progress(
+    feed,
+    start_date,
+    end_date,
+):
     return {
         "version": VERSION,
+        "feed": feed,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "last_completed_date": None,
@@ -176,9 +236,15 @@ def create_empty_progress(start_date, end_date):
     }
 
 
-def load_progress(progress_file, start_date, end_date):
+def load_progress(
+    progress_file,
+    feed,
+    start_date,
+    end_date,
+):
     if not progress_file.exists():
         return create_empty_progress(
+            feed,
             start_date,
             end_date,
         )
@@ -189,6 +255,15 @@ def load_progress(progress_file, start_date, end_date):
         encoding="utf-8",
     ) as file:
         progress = json.load(file)
+
+    if progress.get("feed") not in (
+        None,
+        feed,
+    ):
+        raise RuntimeError(
+            "Le checkpoint ne correspond pas "
+            "au flux demandé."
+        )
 
     if progress.get("start_date") != start_date.isoformat():
         raise RuntimeError(
@@ -201,6 +276,8 @@ def load_progress(progress_file, start_date, end_date):
             "Le checkpoint ne correspond pas "
             "à la date de fin demandée."
         )
+
+    progress["feed"] = feed
 
     progress.setdefault(
         "successful_days",
@@ -247,7 +324,7 @@ def save_progress(progress_file, progress):
 
 
 # ============================================================
-# DATE DE REPRISE
+# DATE DE REPRISE DU CHECKPOINT
 # ============================================================
 
 def get_resume_date(progress, start_date):
@@ -311,14 +388,21 @@ def save_xml_atomic(output_file, xml_data):
 # URL NASDAQ
 # ============================================================
 
-def build_url(target_date):
+def build_url(
+    target_date,
+    feed,
+):
     date_string = target_date.strftime(
         "%m%d%Y"
     )
 
+    settings = get_feed_settings(
+        feed
+    )
+
     return (
         f'{config["nasdaq_rss_base_url"]}'
-        f'&haltdate={date_string}'
+        f'&{settings["query_parameter"]}={date_string}'
     )
 
 
@@ -326,14 +410,22 @@ def build_url(target_date):
 # TÉLÉCHARGEMENT D'UNE DATE
 # ============================================================
 
-def download_halts_for_date(
+def download_for_date(
     target_date,
+    feed,
     max_retries,
     retry_delay_seconds,
 ):
+    settings = get_feed_settings(
+        feed
+    )
+
     output_file = (
-        RAW_DIRECTORY
-        / f"tradehalts_{target_date.isoformat()}.xml"
+        settings["raw_directory"]
+        / (
+            f'{settings["filename_prefix"]}_'
+            f"{target_date.isoformat()}.xml"
+        )
     )
 
     if output_file.exists():
@@ -344,13 +436,15 @@ def download_halts_for_date(
         return "existing"
 
     url = build_url(
-        target_date
+        target_date,
+        feed,
     )
 
     print()
     print("=" * 60)
     print(
-        f"Téléchargement : {target_date}"
+        f'Téléchargement {settings["display_name"]} : '
+        f"{target_date}"
     )
     print("=" * 60)
 
@@ -500,13 +594,19 @@ def main():
         args
     )
 
+    settings = get_feed_settings(
+        args.feed
+    )
+
     progress_file = get_progress_file(
+        args.feed,
         args.start_date,
         args.end_date,
     )
 
     progress = load_progress(
         progress_file,
+        args.feed,
         args.start_date,
         args.end_date,
     )
@@ -524,6 +624,11 @@ def main():
     print("=" * 60)
 
     print()
+    print(
+        f"Flux : "
+        f'{settings["display_name"]}'
+    )
+
     print(
         f"Période cible : "
         f"{args.start_date} → {args.end_date}"
@@ -554,6 +659,11 @@ def main():
         f"{progress_file}"
     )
 
+    print(
+        f"Répertoire RAW : "
+        f'{settings["raw_directory"]}'
+    )
+
     if resume_date > args.end_date:
         print()
         print("=" * 60)
@@ -576,8 +686,9 @@ def main():
 
     while current_date <= args.end_date:
         try:
-            result = download_halts_for_date(
+            result = download_for_date(
                 current_date,
+                args.feed,
                 args.max_retries,
                 args.retry_delay_seconds,
             )
@@ -659,6 +770,11 @@ def main():
     print("=" * 60)
 
     print(
+        f"Flux : "
+        f'{settings["display_name"]}'
+    )
+
+    print(
         f"Nouveaux téléchargements : "
         f"{session_downloaded}"
     )
@@ -695,7 +811,7 @@ def main():
 
     print(
         f"XML : "
-        f"{RAW_DIRECTORY}"
+        f'{settings["raw_directory"]}'
     )
 
 

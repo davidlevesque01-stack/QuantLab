@@ -143,14 +143,22 @@ load_postgresql.py
 
 ### 5.1 Historical Acquisition
 
-Historical immutable source files use date-based names such as:
+Historical acquisition now uses two complementary Nasdaq date views.
+
+HALT-oriented corpus:
 
 ```text
-tradehalts_2026-08-03.xml
-tradehalts_2026-08-04.xml
+tradehalts_YYYY-MM-DD.xml
 ```
 
-and are stored under the collector RAW historical directory.
+RESUMPTION-oriented corpus:
+
+```text
+resumptions/resumptions_YYYY-MM-DD.xml
+```
+
+The historical collector V0.5.1 supports `--feed halts` and `--feed resumptions`, separate checkpoints,
+a default 2-second inter-date delay, and retry waits of 5 seconds then 10 seconds.
 
 ### 5.2 Live Acquisition
 
@@ -215,7 +223,7 @@ halt_start
 
 ---
 
-## 6. Nasdaq PostgreSQL Persistence V1.2
+## 6. Nasdaq PostgreSQL Persistence V1.3
 
 Nasdaq-specific PostgreSQL persistence is implemented in:
 
@@ -226,7 +234,7 @@ collectors/nasdaq_halts/src/nasdaq_postgresql.py
 Current application persistence version:
 
 ```text
-VERSION = "1.2"
+VERSION = "1.3.2"
 ```
 
 The module uses the common database connectivity layer under:
@@ -250,7 +258,7 @@ Its responsibilities include:
 - transaction control;
 - concurrency serialization.
 
-### 6.1 V1.2 Data Flow
+### 6.1 V1.3 Data Flow
 
 ```text
 Nasdaq XML
@@ -323,12 +331,12 @@ analytics
 
 ---
 
-## 8. Nasdaq Data Model V1.2
+## 8. Nasdaq Data Model V1.3
 
 The physical Nasdaq PostgreSQL model is:
 
 ```text
-Data Model V1.2
+Data Model V1.3
 ```
 
 Primary objects:
@@ -366,6 +374,7 @@ market
 halt_date
 halt_time
 reason_code
+resumption_reason_code
 resumption_date
 resumption_quote_time
 resumption_trade_time
@@ -458,6 +467,7 @@ Current migration files:
 004_update_nasdaq_core_natural_key_v1_1.sql
 005_create_nasdaq_resumption.sql
 006_nasdaq_persistence_v1_2.sql
+007_nasdaq_resumption_reason_v1_3.sql
 ```
 
 Two historical migrations use prefix `002`.
@@ -821,8 +831,8 @@ PowerShell 7 evaluation is deferred until the Nasdaq/PostgreSQL checkpoint is fu
 Nasdaq PostgreSQL persistence has reached:
 
 ```text
-Data Model V1.2
-PostgreSQL Persistence V1.2
+Data Model V1.3
+PostgreSQL Persistence V1.3.2
 ```
 
 Validated capabilities include:
@@ -886,3 +896,44 @@ collectors/nasdaq_halts/docs/ARCHITECTURE.md
 ```
 
 Implementation work resulting from architecture changes should also be reflected in the QuantLab GitHub Project.
+
+
+---
+
+## 24. Nasdaq V1.3 Resumption Semantics
+
+V1.3 separates the semantic context of Nasdaq reason codes.
+
+```text
+HALT ReasonCode       -> reason_code
+RESUMPTION ReasonCode -> resumption_reason_code
+```
+
+A `resumedate` observation can enrich an existing RAW HALT and its associated CORE episode,
+but it must not create a new HALT solely from the resumption feed and must not overwrite the HALT reason.
+
+Reference validation:
+
+```text
+GPUS / AMEX
+HALT reason       : H11
+Resumption reason : T3
+HALT start        : 2026-08-14 14:15:13.698
+HALT end          : 2026-08-25 09:00:00
+CORE episodes     : 1
+```
+
+Migration 007 is applied in DEV. The historical `resumedate` backfill 2020-2026 is complete.
+
+Final V1.3 `resumedate` checkpoint:
+
+```text
+XML files                     : 2 435
+Source observations           : 69 211
+Unique V1.3 identities        : 68 195
+Duplicate source observations : 1 016
+```
+
+The static rerun is idempotent. PostgreSQL non-regression checks pass, the normal V1.3.1 CSV loader was validated under `ROLLBACK`, the GPUS integration test passes, the analytics suite passes 69/69 tests, and the complete suite passes 70/70 tests.
+
+Known historical limitation: some legacy CORE episodes may retain a final action/resumption code such as `T3` in `reason_code`. V1.3 preserves these episodes. An analytical `ALL` selection therefore means no `reason_code` filter and includes all qualifying CORE episodes.

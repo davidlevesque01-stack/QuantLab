@@ -3,89 +3,64 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 
-# ============================================================
-# QUANTLAB - NASDAQ XML PARSER
-# ============================================================
-
 NS = {
     "ndaq": "http://www.nasdaqtrader.com/"
 }
 
+SOURCE_TYPE_HALT = "halt"
+SOURCE_TYPE_RESUMPTION = "resumption"
+
+VALID_SOURCE_TYPES = {
+    SOURCE_TYPE_HALT,
+    SOURCE_TYPE_RESUMPTION,
+}
+
 
 def clean(value):
-    """
-    Nettoie une valeur provenant du XML Nasdaq.
-    """
     if value is None:
-        return ""
+        return None
 
-    return value.strip()
+    value = value.strip()
+
+    if not value:
+        return None
+
+    return value
 
 
 def parse_datetime(date_text, time_text):
-    """
-    Convertit une date et une heure Nasdaq en datetime.
-
-    Exemples :
-        08/10/2026 + 15:50:07.393
-        08/10/2026 + 15:50:07
-    """
-
     date_text = clean(date_text)
     time_text = clean(time_text)
 
     if not date_text or not time_text:
         return None
 
-    # Certains fichiers Nasdaq contiennent des espaces
-    # avant la fraction de seconde.
-    time_text = time_text.replace(" ", "")
+    time_text = time_text.replace(
+        " ",
+        ""
+    )
 
-    formats = [
-        "%m/%d/%Y %H:%M:%S.%f",
-        "%m/%d/%Y %H:%M:%S",
-    ]
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(
-                f"{date_text} {time_text}",
-                fmt
-            )
-        except ValueError:
-            continue
-
-    return None
+    return datetime.fromisoformat(
+        f"{datetime.strptime(date_text, '%m/%d/%Y').date()} "
+        f"{time_text}"
+    )
 
 
 def get_field(item, field):
-    """
-    Retourne un champ Nasdaq nettoyé.
-    """
+    node = item.find(
+        f"ndaq:{field}",
+        NS
+    )
+
+    if node is None:
+        return None
 
     return clean(
-        item.findtext(
-            f"ndaq:{field}",
-            default="",
-            namespaces=NS
-        )
+        node.text
     )
 
 
 def get_market(item):
-    """
-    Normalise le champ marché.
-
-    Les XML historiques validés utilisent :
-        Mkt
-
-    Le flux live/current validé utilise :
-        Market
-
-    Les deux variantes sont normalisées vers :
-        market
-    """
-
     market = get_field(
         item,
         "Mkt"
@@ -100,17 +75,42 @@ def get_market(item):
     )
 
 
-def parse_xml_root(root, source_file):
-    """
-    Parse un arbre XML Nasdaq déjà chargé.
+def validate_source_type(source_type):
+    if source_type not in VALID_SOURCE_TYPES:
+        raise ValueError(
+            "Unsupported Nasdaq XML source_type: "
+            f"{source_type!r}. "
+            "Expected 'halt' or 'resumption'."
+        )
 
-    Retourne une liste d'événements normalisés.
+
+def parse_xml_root(
+    root,
+    source_file,
+    source_type=SOURCE_TYPE_HALT,
+):
     """
+    Parse un flux Nasdaq Trade Halts.
+
+    source_type='halt':
+        ReasonCode -> reason_code
+
+    source_type='resumption':
+        ReasonCode -> resumption_reason_code
+
+    Le sens de ReasonCode est donc déterminé par le type de
+    requête Nasdaq ayant produit le XML, jamais par sa valeur.
+    """
+
+    validate_source_type(
+        source_type
+    )
 
     events = []
 
-    for item in root.findall(".//item"):
-
+    for item in root.findall(
+        ".//item"
+    ):
         symbol = get_field(
             item,
             "IssueSymbol"
@@ -128,10 +128,17 @@ def parse_xml_root(root, source_file):
             item
         )
 
-        reason_code = get_field(
+        source_reason_code = get_field(
             item,
             "ReasonCode"
         )
+
+        if source_type == SOURCE_TYPE_RESUMPTION:
+            reason_code = None
+            resumption_reason_code = source_reason_code
+        else:
+            reason_code = source_reason_code
+            resumption_reason_code = None
 
         pause_threshold = get_field(
             item,
@@ -168,78 +175,48 @@ def parse_xml_root(root, source_file):
             halt_time
         )
 
-        # Priorité à ResumptionTradeTime.
-        #
-        # Le titre est considéré halted jusqu'à la reprise
-        # des transactions.
-
         resumption_time = (
             resumption_trade_time
+            or resumption_quote_time
         )
-
-        if not resumption_time:
-            resumption_time = (
-                resumption_quote_time
-            )
 
         halt_end = parse_datetime(
             resumption_date,
             resumption_time
         )
 
-        events.append({
-            "symbol":
-                symbol,
-
-            "issue_name":
-                issue_name,
-
-            "market":
-                market,
-
-            "reason_code":
-                reason_code,
-
-            "halt_date":
-                halt_date,
-
-            "halt_time":
-                halt_time,
-
-            "resumption_date":
-                resumption_date,
-
-            "resumption_quote_time":
-                resumption_quote_time,
-
-            "resumption_trade_time":
-                resumption_trade_time,
-
-            "pause_threshold_price":
-                pause_threshold,
-
-            "halt_start":
-                halt_start,
-
-            "halt_end":
-                halt_end,
-
-            "source_file":
-                source_file,
-        })
+        events.append(
+            {
+                "symbol": symbol,
+                "issue_name": issue_name,
+                "market": market,
+                "reason_code": reason_code,
+                "resumption_reason_code":
+                    resumption_reason_code,
+                "halt_date": halt_date,
+                "halt_time": halt_time,
+                "resumption_date":
+                    resumption_date,
+                "resumption_quote_time":
+                    resumption_quote_time,
+                "resumption_trade_time":
+                    resumption_trade_time,
+                "pause_threshold_price":
+                    pause_threshold,
+                "halt_start": halt_start,
+                "halt_end": halt_end,
+                "source_file": source_file,
+                "source_type": source_type,
+            }
+        )
 
     return events
 
 
-def parse_xml_file(xml_file):
-    """
-    Lit un fichier XML Nasdaq et retourne les événements
-    normalisés.
-
-    Compatible avec les variantes historiques et live
-    actuellement connues.
-    """
-
+def parse_xml_file(
+    xml_file,
+    source_type=SOURCE_TYPE_HALT,
+):
     xml_file = Path(
         xml_file
     )
@@ -250,20 +227,22 @@ def parse_xml_file(xml_file):
 
     return parse_xml_root(
         tree.getroot(),
-        xml_file.name
+        xml_file.name,
+        source_type=source_type,
     )
 
 
-def parse_xml_bytes(xml_data, source_file):
-    """
-    Parse directement un document XML Nasdaq reçu en mémoire.
-    """
-
+def parse_xml_bytes(
+    xml_data,
+    source_file,
+    source_type=SOURCE_TYPE_HALT,
+):
     root = ET.fromstring(
         xml_data
     )
 
     return parse_xml_root(
         root,
-        source_file
+        source_file,
+        source_type=source_type,
     )

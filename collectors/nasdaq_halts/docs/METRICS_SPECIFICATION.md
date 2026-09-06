@@ -1,7 +1,7 @@
 # QuantLab – Nasdaq HALT Metrics Specification
 
-**Version:** V1.0
-**Status:** Analytical reference specification — aligned with Nasdaq Data Model V1.2
+**Version:** V1.1
+**Status:** Analytical reference specification — aligned with Nasdaq Data Model V1.3
 
 ## 1. Scope
 
@@ -147,9 +147,9 @@ If no valid resumption/end exists:
 `halt_end = NULL`
 
 
-## 3.7 Alignment with PostgreSQL Data Model V1.2
+## 3.7 Alignment with PostgreSQL Data Model V1.3
 
-The analytical episode basis defined in this specification is aligned with the validated PostgreSQL V1.2 model.
+The analytical episode basis defined in this specification is aligned with the validated PostgreSQL V1.3 model.
 
 The three relevant persistence levels are:
 
@@ -299,6 +299,16 @@ Multiple reason codes for one continuous episode count once.
 
 ## 6. Reason-Code Filtering
 
+### 6.0 ALL — No HALT Reason Filter
+
+`ALL` means every qualifying CORE HALT episode is eligible regardless of the value stored in `core.nasdaq_halt_episode.reason_code`.
+
+When `ALL` is selected, the analytical query must not apply a `reason_code` predicate. This includes historical CORE episodes whose stored `reason_code` is a resumption/action code such as `T3`.
+
+```text
+ALL = all qualifying CORE HALT episodes
+```
+
 The application supports three analytical filter contexts:
 
 1. HALT Reason Code
@@ -379,6 +389,7 @@ market
 halt_date
 halt_time
 reason_code
+resumption_reason_code
 resumption_date
 resumption_quote_time
 resumption_trade_time
@@ -487,7 +498,7 @@ The application shall not collapse HALT and Resumption reason codes into one und
 
 ## 12. Historical Backfill and Rebuild
 
-The V1.2 persistence architecture supports historical rebuild from immutable Nasdaq XML provenance.
+The V1.3 persistence architecture supports historical rebuild from immutable Nasdaq XML provenance.
 
 When additional historical resumption information is collected or the persistence model changes, the rebuild process shall:
 
@@ -501,7 +512,22 @@ When additional historical resumption information is collected or the persistenc
 8. Recalculate dependent analytical datasets.
 9. Validate results against known reference cases.
 
-The full historical corpus through 2026-08-28 has been processed under the V1.2 persistence model.
+The HALT-oriented historical corpus through 2026-08-28 was processed under the V1.2 persistence model.
+
+V1.3 adds the complementary `resumedate` corpus. The historical backfill 2020-2026 was completed year by year on 2026-09-06.
+
+Final `resumedate` checkpoint:
+
+```text
+XML files                     : 2 435
+Source observations           : 69 211
+Unique V1.3 identities        : 68 195
+Duplicate source observations : 1 016
+```
+
+The static rerun is idempotent (`RESUMPTION inserted : 0`). The GPUS integration test passes, the analytics suite passes 69/69 tests, and the complete test suite passes 70/70 tests.
+
+Known historical limitation: some legacy CORE episodes carry a final action/resumption code such as `T3` because the archived `haltdate` snapshot did not retain the initial HALT reason. V1.3 preserves those episodes; they remain included when the analytical filter is `ALL`.
 
 Reference persistence counts are:
 
@@ -521,3 +547,29 @@ The GPUS episode spanning 2026-08-14 through 2026-08-25 remains an important ana
 For each ticker/date/reason-code context, Metrics 1–9 should be derived from a reusable historical HALT dataset rather than independently re-reading and recalculating the same source data for each metric.
 
 The implementation shall support potentially large batch files and should reuse overlapping historical calculations where practical without changing metric results.
+
+
+## 14. V1.3 Analytical Rule — Reason Context Is Source-Specific
+
+The analytical layer must preserve the source context of a reason code:
+
+```text
+HALT feed / haltdate
+ReasonCode -> HALT reason_code
+
+RESUMPTION feed / resumedate
+ReasonCode -> resumption_reason_code
+```
+
+The text value of a code is not sufficient to determine its analytical role.
+
+For primary HALT metrics and HALT-reason filtering, `reason_code` remains the governing reason attribute.
+`resumption_reason_code` may be used only in an explicitly selected resumption-reason analytical context.
+
+The GPUS reference case remains:
+
+```text
+HALT reason_code       = H11
+resumption_reason_code = T3
+CORE episode count     = 1
+```

@@ -1,8 +1,11 @@
+import argparse
 import csv
 from datetime import datetime, time
 from pathlib import Path
 
 from shared.database import get_connection
+from collectors.nasdaq_halts.src.nasdaq_xml import parse_xml_file
+from collectors.nasdaq_halts.src.nasdaq_postgresql import persist_nasdaq_resumptions
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -10,6 +13,7 @@ PROCESSED_DIR = BASE_DIR / "data" / "processed"
 
 TRADEHALTS_FILE = PROCESSED_DIR / "tradehalts.csv"
 EPISODES_FILE = PROCESSED_DIR / "halt_episodes.csv"
+RESUMPTIONS_DIR = BASE_DIR / "data" / "raw" / "nasdaq" / "historical" / "resumptions"
 
 
 def empty_to_none(value: str | None):
@@ -281,10 +285,16 @@ def load_tradehalts(cur):
 
 def load_resumptions(cur):
     """
-    Charge les observations de reprise en une opération set-based.
+    Charge les observations de reprise du CSV HALT en une opération
+    set-based.
 
-    La contrainte V1.2 UNIQUE NULLS NOT DISTINCT rend le
-    ON CONFLICT idempotent même lorsque quote/trade time est NULL.
+    Sémantique V1.3:
+    - reason_code provient du contexte HALT du CSV historique;
+    - resumption_reason_code reste NULL, car le CSV HALT ne provient
+      pas du flux Nasdaq resumedate;
+    - l'identité PostgreSQL V1.3 contient les deux contextes de raison;
+    - UNIQUE NULLS NOT DISTINCT rend le ON CONFLICT idempotent même
+      lorsque resumption_reason_code, quote time ou trade time est NULL.
     """
     cur.execute(
         """
@@ -295,6 +305,7 @@ def load_resumptions(cur):
                 halt_date,
                 halt_time,
                 reason_code,
+                NULL::varchar(20) AS resumption_reason_code,
                 resumption_date,
                 resumption_quote_time,
                 resumption_trade_time,
@@ -309,6 +320,7 @@ def load_resumptions(cur):
                 halt_date,
                 halt_time,
                 reason_code,
+                resumption_reason_code,
                 resumption_date,
                 resumption_quote_time,
                 resumption_trade_time,
@@ -320,6 +332,7 @@ def load_resumptions(cur):
                 halt_date,
                 halt_time,
                 reason_code,
+                resumption_reason_code,
                 resumption_date,
                 resumption_quote_time,
                 resumption_trade_time,
@@ -331,6 +344,7 @@ def load_resumptions(cur):
                 halt_date,
                 halt_time,
                 reason_code,
+                resumption_reason_code,
                 resumption_date,
                 resumption_quote_time,
                 resumption_trade_time
@@ -540,9 +554,116 @@ def load_episodes(cur):
     )
 
 
-def main():
-    print("QuantLab - Nasdaq PostgreSQL Loader V1.2 (batch)")
+
+def _read_historical_resumption_events():
+    """
+    Lit tous les snapshots Nasdaq collectés avec le paramètre
+    resumedate.
+
+    IMPORTANT V1.3:
+    - le ReasonCode de ces fichiers est interprété comme
+      resumption_reason_code;
+    - ces observations ne passent jamais dans le pipeline HALT;
+    - elles sont destinées exclusivement à
+      persist_nasdaq_resumptions().
+    """
+
+    if not RESUMPTIONS_DIR.exists():
+        return [], 0
+
+    files = sorted(
+        RESUMPTIONS_DIR.glob("resumptions_*.xml")
+    )
+
+    events = []
+
+    for xml_file in files:
+        parsed = parse_xml_file(
+            xml_file,
+            source_type="resumption",
+        )
+
+        events.extend(parsed)
+
+    return events, len(files)
+
+
+def load_historical_resumptions():
+    """
+    Persiste les snapshots historiques resumedate déjà archivés.
+
+    La persistance V1.3:
+    - écrit raw.nasdaq_resumption;
+    - enrichit le HALT RAW correspondant;
+    - enrichit l'épisode CORE existant via CORE -> RAW;
+    - ne crée jamais un nouveau HALT à partir d'un resumedate.
+    """
+
     print()
+    print("Lecture des XML historiques RESUMPTION...")
+
+    events, file_count = _read_historical_resumption_events()
+
+    print(
+        f"Fichiers resumption     : {file_count}"
+    )
+    print(
+        f"Observations resumption : {len(events)}"
+    )
+
+    if not events:
+        print(
+            "Aucune observation resumption à charger."
+        )
+        return {
+            "resumption_inserted": 0,
+            "resumption_existing": 0,
+            "raw_enriched": 0,
+            "core_enriched": 0,
+        }
+
+    return persist_nasdaq_resumptions(
+        events
+    )
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "QuantLab Nasdaq PostgreSQL Loader V1.3.1"
+        )
+    )
+
+    parser.add_argument(
+        "--include-resumptions",
+        action="store_true",
+        help=(
+            "Charge aussi les XML historical/resumptions "
+            "avec la sémantique resumedate V1.3."
+        ),
+    )
+
+    parser.add_argument(
+        "--resumptions-only",
+        action="store_true",
+        help=(
+            "Charge uniquement les XML historical/resumptions "
+            "sans rejouer les CSV HALT/CORE."
+        ),
+    )
+
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    print("QuantLab - Nasdaq PostgreSQL Loader V1.3.1 (batch)")
+    print()
+
+    if args.resumptions_only:
+        load_historical_resumptions()
+        return
 
     print("Lecture des CSV...")
     tradehalt_rows = _read_tradehalt_rows()
@@ -558,7 +679,7 @@ def main():
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            print("Acquisition du verrou Nasdaq V1.2...")
+            print("Acquisition du verrou Nasdaq V1.3...")
             cur.execute(
                 "SELECT pg_advisory_xact_lock(%s, %s);",
                 (716203, 1),
@@ -625,7 +746,7 @@ def main():
             ) = load_episodes(cur)
 
     print()
-    print("POSTGRESQL LOADER V1.2 TERMINÉ")
+    print("POSTGRESQL LOADER V1.3.1 TERMINÉ")
     print(
         f"RAW inserted          : {raw_inserted}"
     )
@@ -650,6 +771,9 @@ def main():
     print(
         f"RELATION existing     : {relation_existing}"
     )
+
+    if args.include_resumptions:
+        load_historical_resumptions()
 
 
 if __name__ == "__main__":
