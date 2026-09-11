@@ -5,6 +5,7 @@ from collectors.warrants.src.export_warrant_diagnostics import (
     build_diagnostic_rows,
     build_edgar_filing_url,
     build_exhibit_diagnostic_rows,
+    build_text_extraction_diagnostic_rows,
     export_diagnostic_rows,
     write_csv,
 )
@@ -61,6 +62,9 @@ def test_export_diagnostic_rows_skips_unresolved_tickers():
     ) as mocked_shares, patch(
         "collectors.warrants.src.export_warrant_diagnostics.read_sec_8k_warrant_exhibits",
         return_value=[],
+    ), patch(
+        "collectors.warrants.src.export_warrant_diagnostics.read_sec_8k_warrant_text_extractions",
+        return_value=[],
     ):
 
         rows = export_diagnostic_rows(
@@ -107,6 +111,17 @@ def test_export_diagnostic_rows_combines_both_sources():
         "document_url": "https://www.sec.gov/.../ex4-1.htm",
     }
 
+    text_extraction = {
+        "accession_number": "0001213900-26-095686",
+        "document_url": "https://www.sec.gov/.../ea0303883-8k_tenon.htm",
+        "kind": "exercise_price",
+        "label": "Each Series A",
+        "share_quantity": None,
+        "exercise_price": 5.02,
+        "expiration_years": None,
+        "raw_snippet": "Each Series A Warrant has an exercise price of $5.02 per share",
+    }
+
     with patch(
         "collectors.warrants.src.export_warrant_diagnostics.read_sec_warrant_xbrl_facts",
         return_value=[warrant_fact],
@@ -116,6 +131,9 @@ def test_export_diagnostic_rows_combines_both_sources():
     ), patch(
         "collectors.warrants.src.export_warrant_diagnostics.read_sec_8k_warrant_exhibits",
         return_value=[exhibit],
+    ), patch(
+        "collectors.warrants.src.export_warrant_diagnostics.read_sec_8k_warrant_text_extractions",
+        return_value=[text_extraction],
     ):
 
         rows = export_diagnostic_rows(
@@ -128,8 +146,9 @@ def test_export_diagnostic_rows_combines_both_sources():
         "warrant",
         "shares_outstanding",
         "8k_warrant_exhibit",
+        "8k_warrant_text_extraction",
     }
-    assert len(rows) == 3
+    assert len(rows) == 4
 
 
 def test_build_exhibit_diagnostic_rows_uses_document_url_as_filing_url():
@@ -151,6 +170,45 @@ def test_build_exhibit_diagnostic_rows_uses_document_url_as_filing_url():
     assert row["source_table"] == "8k_warrant_exhibit"
     assert row["description"] == "FORM OF PRE-FUNDED WARRANT"
     assert row["filing_url"] == "https://www.sec.gov/.../ex4-1.htm"
+
+
+def test_build_text_extraction_diagnostic_rows_picks_value_by_kind():
+    extractions = [
+        {
+            "accession_number": "0001213900-26-095686",
+            "document_url": "https://www.sec.gov/.../ea0303883-8k_tenon.htm",
+            "kind": "exercise_price",
+            "label": "Each Series A",
+            "share_quantity": None,
+            "exercise_price": 5.02,
+            "expiration_years": None,
+            "raw_snippet": "Each Series A Warrant has an exercise price of $5.02 per share",
+        },
+        {
+            "accession_number": "0001213900-26-095686",
+            "document_url": "https://www.sec.gov/.../ea0303883-8k_tenon.htm",
+            "kind": "share_quantity",
+            "label": "Series A",
+            "share_quantity": 1058517,
+            "exercise_price": None,
+            "expiration_years": None,
+            "raw_snippet": "Series A warrants to purchase up to an aggregate of 1,058,517 shares",
+        },
+    ]
+
+    rows = build_text_extraction_diagnostic_rows("TNON", "0001560293", extractions)
+
+    assert len(rows) == 2
+
+    price_row = next(row for row in rows if row["concept"] == "exercise_price")
+    assert price_row["value"] == 5.02
+    assert price_row["unit"] == "USD"
+    assert price_row["source_table"] == "8k_warrant_text_extraction"
+    assert "raw_snippet" in price_row
+
+    qty_row = next(row for row in rows if row["concept"] == "share_quantity")
+    assert qty_row["value"] == 1058517
+    assert qty_row["unit"] == "shares"
 
 
 def test_write_csv_round_trip(tmp_path):

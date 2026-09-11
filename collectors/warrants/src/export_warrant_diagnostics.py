@@ -22,6 +22,7 @@ from collectors.warrants.src.sec_cik_resolution import (
 )
 from collectors.warrants.src.warrants_postgresql import (
     read_sec_8k_warrant_exhibits,
+    read_sec_8k_warrant_text_extractions,
     read_sec_shares_outstanding_facts,
     read_sec_warrant_xbrl_facts,
 )
@@ -47,7 +48,14 @@ FIELDNAMES = [
     "filed_date",
     "accession_number",
     "filing_url",
+    "raw_snippet",
 ]
+
+_TEXT_EXTRACTION_UNIT_BY_KIND = {
+    "share_quantity": "shares",
+    "exercise_price": "USD",
+    "expiration_years": "years",
+}
 
 
 def build_edgar_filing_url(cik, accession_number):
@@ -139,6 +147,50 @@ def build_exhibit_diagnostic_rows(ticker, cik, exhibits):
     return rows
 
 
+def build_text_extraction_diagnostic_rows(ticker, cik, extractions):
+    """
+    Aplatit les observations extraites du texte des 8-K (SEC-10) en
+    lignes CSV. `value` prend la valeur du champ pertinent selon `kind`
+    (share_quantity / exercise_price / expiration_years) ; `raw_snippet`
+    reste toujours visible pour vérification humaine — cette extraction
+    est heuristique, jamais une valeur canonique.
+    """
+
+    rows = []
+
+    for extraction in extractions:
+
+        kind = extraction["kind"]
+        value = (
+            extraction.get("share_quantity")
+            if kind == "share_quantity"
+            else extraction.get("exercise_price")
+            if kind == "exercise_price"
+            else extraction.get("expiration_years")
+        )
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "cik": cik,
+                "source_table": "8k_warrant_text_extraction",
+                "concept": kind,
+                "description": extraction.get("label"),
+                "unit": _TEXT_EXTRACTION_UNIT_BY_KIND.get(kind),
+                "value": value,
+                "period_start": None,
+                "period_end": None,
+                "form": None,
+                "filed_date": None,
+                "accession_number": extraction.get("accession_number"),
+                "filing_url": extraction.get("document_url"),
+                "raw_snippet": extraction.get("raw_snippet"),
+            }
+        )
+
+    return rows
+
+
 def export_diagnostic_rows(conn, tickers, ticker_cik_map):
     """
     Pour chaque ticker résolu vers un CIK, lit les faits warrants et
@@ -175,6 +227,11 @@ def export_diagnostic_rows(conn, tickers, ticker_cik_map):
         warrant_exhibits = read_sec_8k_warrant_exhibits(conn, cik)
         rows.extend(
             build_exhibit_diagnostic_rows(ticker, cik, warrant_exhibits)
+        )
+
+        text_extractions = read_sec_8k_warrant_text_extractions(conn, cik)
+        rows.extend(
+            build_text_extraction_diagnostic_rows(ticker, cik, text_extractions)
         )
 
     return rows

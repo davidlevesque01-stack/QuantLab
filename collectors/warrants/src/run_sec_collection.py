@@ -21,6 +21,9 @@ import os
 from collectors.warrants.src.sec_8k_warrant_exhibit_collector import (
     collect_ticker_8k_warrant_exhibits,
 )
+from collectors.warrants.src.sec_8k_warrant_text_extraction_collector import (
+    collect_ticker_8k_warrant_text_extraction,
+)
 from collectors.warrants.src.sec_cik_resolution import fetch_ticker_cik_map
 from collectors.warrants.src.sec_shares_outstanding_collector import (
     collect_ticker_shares_outstanding,
@@ -91,12 +94,20 @@ def run_collection(
             timeout_seconds=timeout_seconds,
         )
 
+        text_extraction_result = collect_ticker_8k_warrant_text_extraction(
+            ticker,
+            ticker_cik_map,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
+
         results.append(
             {
                 "ticker": ticker,
                 "warrants": warrant_result,
                 "shares_outstanding": shares_result,
                 "warrant_exhibits": exhibits_result,
+                "warrant_text_extraction": text_extraction_result,
             }
         )
 
@@ -175,6 +186,7 @@ def main():
         print(f"  warrants:           {result['warrants']}")
         print(f"  shares_outstanding: {result['shares_outstanding']}")
         print(f"  warrant_exhibits:   {result['warrant_exhibits']}")
+        print(f"  warrant_text:       {result['warrant_text_extraction']}")
 
 
 if __name__ == "__main__":

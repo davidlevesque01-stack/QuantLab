@@ -7,6 +7,7 @@ nasdaq_halts) :
     (716203, 4) -> warrants / SEC shares outstanding XBRL RAW capture
     (716203, 5) -> warrants / SEC 8-K warrant exhibit discovery RAW capture
     (716203, 6) -> warrants / Nasdaq symbol directory RAW capture
+    (716203, 7) -> warrants / SEC 8-K warrant text extraction RAW capture
 
 L'objid 2 est réservé pour la capture RAW DilutionTracker (WRT-04b, à
 venir) afin de conserver un registre cohérent entre les sources.
@@ -483,5 +484,129 @@ def persist_nasdaq_symbol_directory(records, retrieved_at):
         return write_nasdaq_symbol_directory(
             conn,
             records,
+            retrieved_at,
+        )
+
+
+def read_sec_8k_warrant_text_extractions(conn, cik):
+    """Lit raw.sec_8k_warrant_text_extraction pour un CIK donné (lecture seule)."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                accession_number,
+                document_url,
+                kind,
+                label,
+                share_quantity,
+                exercise_price,
+                expiration_years,
+                raw_snippet
+            FROM raw.sec_8k_warrant_text_extraction
+            WHERE cik = %s
+            ORDER BY accession_number, kind;
+            """,
+            (cik,),
+        )
+
+        columns = [description[0] for description in cur.description]
+
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def write_sec_8k_warrant_text_extractions(conn, cik, observations, retrieved_at):
+    """
+    Insère dans raw.sec_8k_warrant_text_extraction les observations
+    extraites du texte des 8-K (voir
+    sec_8k_warrant_text_extraction.discover_and_extract_warrant_terms_for_cik),
+    sur une connexion/transaction fournie par l'appelant (ne commit pas).
+
+    Capture RAW immuable, extraction heuristique : une réingestion
+    identique est un no-op (ON CONFLICT DO NOTHING).
+    """
+
+    rows = []
+    seen = set()
+
+    for observation in observations:
+
+        row = (
+            cik,
+            observation["accession_number"],
+            observation["document_url"],
+            observation["kind"],
+            observation.get("label"),
+            observation.get("share_quantity"),
+            observation.get("exercise_price"),
+            observation.get("expiration_years"),
+            observation["raw_snippet"],
+            retrieved_at,
+        )
+
+        key = (cik, observation["accession_number"], observation["kind"], observation["raw_snippet"])
+
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+
+    if not rows:
+        return {"inserted": 0, "skipped": 0}
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO raw.sec_8k_warrant_text_extraction (
+                cik,
+                accession_number,
+                document_url,
+                kind,
+                label,
+                share_quantity,
+                exercise_price,
+                expiration_years,
+                raw_snippet,
+                retrieved_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (
+                cik,
+                accession_number,
+                kind,
+                raw_snippet
+            ) DO NOTHING;
+            """,
+            rows,
+        )
+
+        inserted = cur.rowcount
+
+    return {
+        "inserted": inserted,
+        "skipped": len(rows) - inserted,
+    }
+
+
+def persist_sec_8k_warrant_text_extractions(cik, observations, retrieved_at):
+    """
+    Ouvre sa propre connexion, prend le verrou advisory (716203, 7) et
+    persiste les observations extraites du texte des 8-K pour un CIK
+    (commit à la sortie du context manager).
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 7),
+            )
+
+        return write_sec_8k_warrant_text_extractions(
+            conn,
+            cik,
+            observations,
             retrieved_at,
         )

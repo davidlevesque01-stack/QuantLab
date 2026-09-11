@@ -1,9 +1,12 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 from collectors.warrants.src.sec_8k_warrant_discovery import (
     discover_warrant_exhibits_for_cik,
+    fetch_url,
     filter_candidate_filings,
     filter_warrant_exhibits,
+    find_main_document,
     parse_filing_index_documents,
     parse_filings_atom,
 )
@@ -38,7 +41,7 @@ SAMPLE_INDEX_HTML = b"""<html><body>
 <tr>
 <td scope="row">1</td>
 <td scope="row">CURRENT REPORT</td>
-<td scope="row"><a href="/Archives/edgar/data/1560293/x/ea0303883-8k_tenon.htm">ea0303883-8k_tenon.htm</a></td>
+<td scope="row"><a href="/ix?doc=/Archives/edgar/data/1560293/x/ea0303883-8k_tenon.htm">ea0303883-8k_tenon.htm &#160;&#160;<span style="color: green">iXBRL</span></a></td>
 <td scope="row">8-K</td>
 <td scope="row">45377</td>
 </tr>
@@ -122,3 +125,134 @@ def test_discover_warrant_exhibits_for_cik_combines_discovery_steps():
     # Only the candidate filing's index should have been fetched, not the
     # non-candidate one.
     mocked_fetch_url.assert_called_once()
+
+
+def test_find_main_document_skips_numbered_exhibits():
+    documents = parse_filing_index_documents(SAMPLE_INDEX_HTML)
+
+    main_document = find_main_document(documents)
+
+    assert main_document["seq"] == 1
+    assert main_document["exhibit_type"] == "8-K"
+    assert main_document["description"] == "CURRENT REPORT"
+
+
+def test_parse_filing_index_documents_unwraps_ixbrl_viewer_url():
+    """
+    Regression test: a document with inline XBRL links to the
+    interactive viewer ("/ix?doc=/Archives/...") in the filing index,
+    not the raw document. Fetching that viewer URL directly does not
+    return the document's own text (it's a JS-rendered shell page), so
+    it must be unwrapped to the real document URL — this broke SEC-10's
+    text extraction in production (silently returned zero results)
+    before being caught and fixed.
+    """
+
+    documents = parse_filing_index_documents(SAMPLE_INDEX_HTML)
+
+    main_document = find_main_document(documents)
+
+    assert main_document["url"] == (
+        "https://www.sec.gov/Archives/edgar/data/1560293/x/ea0303883-8k_tenon.htm"
+    )
+    assert "/ix?doc=" not in main_document["url"]
+
+
+def test_find_main_document_returns_none_when_only_exhibits():
+    documents = [
+        {"seq": 2, "exhibit_type": "EX-1.1", "description": "AGREEMENT", "url": "x"},
+        {"seq": 3, "exhibit_type": "EX-4.1", "description": "FORM OF WARRANT", "url": "y"},
+    ]
+
+    assert find_main_document(documents) is None
+
+
+def _http_error(code):
+    return HTTPError("https://www.sec.gov/x", code, "error", {}, None)
+
+
+def test_fetch_url_retries_on_503_then_succeeds():
+    mock_response = MagicMock()
+    mock_response.read.return_value = b"ok"
+    mock_response.__enter__.return_value = mock_response
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.urlopen",
+        side_effect=[_http_error(503), mock_response],
+    ) as mocked_urlopen, patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.time.sleep",
+    ) as mocked_sleep:
+
+        result = fetch_url(
+            "https://www.sec.gov/x",
+            user_agent="QuantLab test contact@example.com",
+            max_retries=3,
+            retry_delay_seconds=1,
+        )
+
+    assert result == b"ok"
+    assert mocked_urlopen.call_count == 2
+    mocked_sleep.assert_called_once()
+
+
+def test_fetch_url_does_not_retry_on_404():
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.urlopen",
+        side_effect=_http_error(404),
+    ) as mocked_urlopen:
+
+        try:
+            fetch_url(
+                "https://www.sec.gov/x",
+                user_agent="QuantLab test contact@example.com",
+                max_retries=3,
+            )
+            assert False, "expected HTTPError to propagate"
+        except HTTPError as error:
+            assert error.code == 404
+
+    mocked_urlopen.assert_called_once()
+
+
+def test_fetch_url_raises_after_exhausting_retries():
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.urlopen",
+        side_effect=_http_error(503),
+    ) as mocked_urlopen, patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.time.sleep",
+    ):
+
+        try:
+            fetch_url(
+                "https://www.sec.gov/x",
+                user_agent="QuantLab test contact@example.com",
+                max_retries=2,
+                retry_delay_seconds=0,
+            )
+            assert False, "expected HTTPError to propagate"
+        except HTTPError as error:
+            assert error.code == 503
+
+    assert mocked_urlopen.call_count == 3
+
+
+def test_fetch_url_retries_on_url_error():
+    mock_response = MagicMock()
+    mock_response.read.return_value = b"ok"
+    mock_response.__enter__.return_value = mock_response
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.urlopen",
+        side_effect=[URLError("connection reset"), mock_response],
+    ) as mocked_urlopen, patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.time.sleep",
+    ):
+
+        result = fetch_url(
+            "https://www.sec.gov/x",
+            user_agent="QuantLab test contact@example.com",
+            max_retries=3,
+        )
+
+    assert result == b"ok"
+    assert mocked_urlopen.call_count == 2
