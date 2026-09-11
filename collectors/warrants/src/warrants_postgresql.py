@@ -9,6 +9,7 @@ nasdaq_halts) :
     (716203, 6) -> warrants / Nasdaq symbol directory RAW capture
     (716203, 7) -> warrants / SEC 8-K warrant text extraction RAW capture
     (716203, 8) -> warrants / SEC ticker->CIK resolution audit trail RAW capture
+    (716203, 9) -> warrants / SEC reverse stock split event RAW capture
 
 L'objid 2 est réservé pour la capture RAW DilutionTracker (WRT-04b, à
 venir) afin de conserver un registre cohérent entre les sources.
@@ -742,3 +743,126 @@ def read_issue_names_for_tickers(conn, tickers):
         )
 
         return {symbol: issue_name for symbol, issue_name in cur.fetchall()}
+
+
+def read_sec_reverse_split_events(conn, cik):
+    """Lit raw.sec_reverse_split_event pour un CIK donné (lecture seule)."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                accession_number,
+                document_url,
+                filed_date,
+                form_type,
+                ratio_new,
+                ratio_old,
+                effective_date,
+                raw_snippet
+            FROM raw.sec_reverse_split_event
+            WHERE cik = %s
+            ORDER BY filed_date;
+            """,
+            (cik,),
+        )
+
+        columns = [description[0] for description in cur.description]
+
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def write_sec_reverse_split_events(conn, cik, events, retrieved_at):
+    """
+    Insère dans raw.sec_reverse_split_event les événements de split
+    trouvés (voir
+    sec_reverse_split_extraction.discover_and_extract_reverse_splits_for_cik),
+    sur une connexion/transaction fournie par l'appelant (ne commit pas).
+
+    Capture RAW immuable : une réingestion identique est un no-op
+    (ON CONFLICT DO NOTHING).
+    """
+
+    rows = []
+    seen = set()
+
+    for event in events:
+
+        row = (
+            cik,
+            event["accession_number"],
+            event["document_url"],
+            event.get("filed_date"),
+            event.get("form_type"),
+            event["ratio_new"],
+            event["ratio_old"],
+            event.get("effective_date"),
+            event["raw_snippet"],
+            retrieved_at,
+        )
+
+        key = (cik, event["accession_number"], event["raw_snippet"])
+
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+
+    if not rows:
+        return {"inserted": 0, "skipped": 0}
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO raw.sec_reverse_split_event (
+                cik,
+                accession_number,
+                document_url,
+                filed_date,
+                form_type,
+                ratio_new,
+                ratio_old,
+                effective_date,
+                raw_snippet,
+                retrieved_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (
+                cik,
+                accession_number,
+                raw_snippet
+            ) DO NOTHING;
+            """,
+            rows,
+        )
+
+        inserted = cur.rowcount
+
+    return {
+        "inserted": inserted,
+        "skipped": len(rows) - inserted,
+    }
+
+
+def persist_sec_reverse_split_events(cik, events, retrieved_at):
+    """
+    Ouvre sa propre connexion, prend le verrou advisory (716203, 9) et
+    persiste les événements de split pour un CIK (commit à la sortie du
+    context manager).
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 9),
+            )
+
+        return write_sec_reverse_split_events(
+            conn,
+            cik,
+            events,
+            retrieved_at,
+        )

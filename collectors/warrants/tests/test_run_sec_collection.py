@@ -25,7 +25,7 @@ def test_parse_tickers_strips_and_uppercases_and_drops_blanks():
     assert parse_tickers("tnon, abcd ,, zzzz") == ["TNON", "ABCD", "ZZZZ"]
 
 
-def test_run_collection_calls_all_four_collectors_per_ticker():
+def test_run_collection_calls_all_five_collectors_per_ticker():
     ticker_cik_map = {"TNON": "0001234567"}
 
     with patch(
@@ -40,7 +40,10 @@ def test_run_collection_calls_all_four_collectors_per_ticker():
     ) as mocked_exhibits, patch(
         "collectors.warrants.src.run_sec_collection.collect_ticker_8k_warrant_text_extraction",
         return_value={"ticker": "TNON", "cik": "0001234567", "status": "ok"},
-    ) as mocked_text_extraction:
+    ) as mocked_text_extraction, patch(
+        "collectors.warrants.src.run_sec_collection.collect_ticker_reverse_splits",
+        return_value={"ticker": "TNON", "cik": "0001234567", "status": "ok"},
+    ) as mocked_reverse_splits:
 
         results = run_collection(
             ["TNON"],
@@ -55,6 +58,7 @@ def test_run_collection_calls_all_four_collectors_per_ticker():
     assert results[0]["shares_outstanding"]["status"] == "ok"
     assert results[0]["warrant_exhibits"]["status"] == "ok"
     assert results[0]["warrant_text_extraction"]["status"] == "ok"
+    assert results[0]["reverse_splits"]["status"] == "ok"
     mocked_warrants.assert_called_once_with(
         "TNON",
         ticker_cik_map,
@@ -74,6 +78,12 @@ def test_run_collection_calls_all_four_collectors_per_ticker():
         timeout_seconds=5,
     )
     mocked_text_extraction.assert_called_once_with(
+        "TNON",
+        ticker_cik_map,
+        user_agent="QuantLab test contact@example.com",
+        timeout_seconds=5,
+    )
+    mocked_reverse_splits.assert_called_once_with(
         "TNON",
         ticker_cik_map,
         user_agent="QuantLab test contact@example.com",

@@ -31,6 +31,9 @@ from collectors.warrants.src.sec_8k_warrant_text_extraction_collector import (
     collect_ticker_8k_warrant_text_extraction,
 )
 from collectors.warrants.src.sec_cik_resolution import fetch_ticker_cik_map
+from collectors.warrants.src.sec_reverse_split_collector import (
+    collect_ticker_reverse_splits,
+)
 from collectors.warrants.src.sec_ticker_universe_resolution import (
     build_augmented_ticker_cik_map,
 )
@@ -110,6 +113,13 @@ def run_collection(
             timeout_seconds=timeout_seconds,
         )
 
+        reverse_split_result = collect_ticker_reverse_splits(
+            ticker,
+            ticker_cik_map,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
+
         results.append(
             {
                 "ticker": ticker,
@@ -117,6 +127,7 @@ def run_collection(
                 "shares_outstanding": shares_result,
                 "warrant_exhibits": exhibits_result,
                 "warrant_text_extraction": text_extraction_result,
+                "reverse_splits": reverse_split_result,
             }
         )
 
@@ -203,6 +214,7 @@ def main():
         print(f"  shares_outstanding: {result['shares_outstanding']}")
         print(f"  warrant_exhibits:   {result['warrant_exhibits']}")
         print(f"  warrant_text:       {result['warrant_text_extraction']}")
+        print(f"  reverse_splits:     {result['reverse_splits']}")
 
 
 if __name__ == "__main__":
