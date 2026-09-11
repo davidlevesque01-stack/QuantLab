@@ -1,0 +1,16 @@
+{
+  "dilutiontracker": {
+    "base_url": "SET_FROM_OFFICIAL_API_DOCUMENTATION",
+    "timeout_seconds": 30,
+    "api_token_env": "DILUTIONTRACKER_API_TOKEN"
+  },
+  "sec": {
+    "user_agent_env": "QUANTLAB_SEC_USER_AGENT",
+    "request_timeout_seconds": 30
+  },
+  "bootstrap": {
+    "history_years": 5,
+    "retain_raw_payloads": true,
+    "validate_against_sec": true
+  }
+}
