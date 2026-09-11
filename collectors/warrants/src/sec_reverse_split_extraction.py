@@ -25,7 +25,7 @@ import re
 from datetime import datetime
 
 from collectors.warrants.src.sec_8k_warrant_discovery import (
-    fetch_8k_filings,
+    fetch_all_8k_filings,
     fetch_url,
     find_main_document,
     parse_filing_index_documents,
@@ -109,14 +109,15 @@ def discover_and_extract_reverse_splits_for_cik(
     timeout_seconds=30,
 ):
     """
-    Pour un CIK : liste les 8-K candidats (items 3.03/5.03), ouvre le
+    Pour un CIK : liste l'historique COMPLET des 8-K (SEC-12, plus
+    limité aux 40 plus récents) candidats (items 3.03/5.03), ouvre le
     document principal de chacun, et y cherche un ratio de reverse
     split. Retourne une liste d'événements de split trouvés (un par
     filing où un ratio a été reconnu), chacun annoté de son
     accession_number, document_url, filed_date et form_type.
     """
 
-    filings = fetch_8k_filings(
+    filings = fetch_all_8k_filings(
         cik,
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,

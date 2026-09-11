@@ -82,7 +82,7 @@ def test_filter_split_candidate_filings_keeps_only_3_03_or_5_03():
 
 def test_discover_and_extract_reverse_splits_for_cik_end_to_end():
     with patch(
-        "collectors.warrants.src.sec_reverse_split_extraction.fetch_8k_filings",
+        "collectors.warrants.src.sec_reverse_split_extraction.fetch_all_8k_filings",
         return_value=[
             {
                 "accession_number": "0001213900-26-087352",
@@ -122,7 +122,7 @@ def test_discover_and_extract_reverse_splits_for_cik_end_to_end():
 
 def test_discover_and_extract_reverse_splits_skips_filings_without_a_ratio():
     with patch(
-        "collectors.warrants.src.sec_reverse_split_extraction.fetch_8k_filings",
+        "collectors.warrants.src.sec_reverse_split_extraction.fetch_all_8k_filings",
         return_value=[
             {
                 "accession_number": "0001213900-26-000001",

@@ -25,7 +25,7 @@ import html
 import re
 
 from collectors.warrants.src.sec_8k_warrant_discovery import (
-    fetch_8k_filings,
+    fetch_all_8k_filings,
     fetch_url,
     filter_candidate_filings,
     find_main_document,
@@ -169,7 +169,8 @@ def discover_and_extract_warrant_terms_for_cik(
     timeout_seconds=30,
 ):
     """
-    Pour un CIK : liste les 8-K candidats (items 1.01/3.02, réutilise
+    Pour un CIK : liste l'historique COMPLET des 8-K (SEC-12, plus
+    limité aux 40 plus récents) candidats (items 1.01/3.02, réutilise
     sec_8k_warrant_discovery), ouvre le document PRINCIPAL de chacun
     (pas les exhibits), en extrait le texte, et y applique
     extract_warrant_terms.
@@ -179,7 +180,7 @@ def discover_and_extract_warrant_terms_for_cik(
     prêtes à persister.
     """
 
-    filings = fetch_8k_filings(
+    filings = fetch_all_8k_filings(
         cik,
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,

@@ -49,6 +49,7 @@ FIELDNAMES = [
     "accession_number",
     "filing_url",
     "raw_snippet",
+    "match_reason",
 ]
 
 _TEXT_EXTRACTION_UNIT_BY_KIND = {
@@ -141,6 +142,7 @@ def build_exhibit_diagnostic_rows(ticker, cik, exhibits):
                 "filed_date": exhibit.get("filing_date"),
                 "accession_number": exhibit.get("accession_number"),
                 "filing_url": exhibit.get("document_url"),
+                "match_reason": exhibit.get("match_reason"),
             }
         )
 

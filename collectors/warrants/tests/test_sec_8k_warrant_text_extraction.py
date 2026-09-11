@@ -151,7 +151,7 @@ SAMPLE_8K_BODY_HTML = (
 
 def test_discover_and_extract_warrant_terms_for_cik_uses_main_document():
     with patch(
-        "collectors.warrants.src.sec_8k_warrant_text_extraction.fetch_8k_filings",
+        "collectors.warrants.src.sec_8k_warrant_text_extraction.fetch_all_8k_filings",
         return_value=[
             {
                 "accession_number": "0001213900-26-095686",

@@ -278,7 +278,8 @@ def read_sec_8k_warrant_exhibits(conn, cik):
                 exhibit_type,
                 description,
                 document_url,
-                filing_index_url
+                filing_index_url,
+                match_reason
             FROM raw.sec_8k_warrant_exhibit
             WHERE cik = %s
             ORDER BY filing_date, exhibit_seq;
@@ -318,6 +319,7 @@ def write_sec_8k_warrant_exhibits(conn, cik, exhibits, retrieved_at):
             exhibit.get("description"),
             exhibit["document_url"],
             exhibit.get("filing_index_url"),
+            exhibit.get("match_reason"),
             retrieved_at,
         )
 
@@ -344,11 +346,12 @@ def write_sec_8k_warrant_exhibits(conn, cik, exhibits, retrieved_at):
                 description,
                 document_url,
                 filing_index_url,
+                match_reason,
                 retrieved_at
             )
             VALUES (
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (
                 cik,
