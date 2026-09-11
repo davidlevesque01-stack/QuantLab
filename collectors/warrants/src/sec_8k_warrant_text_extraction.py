@@ -175,7 +175,8 @@ def discover_and_extract_warrant_terms_for_cik(
     extract_warrant_terms.
 
     Retourne une liste d'observations aplaties, chacune annotée de son
-    accession_number et document_url d'origine, prêtes à persister.
+    accession_number, document_url, filed_date et form_type d'origine,
+    prêtes à persister.
     """
 
     filings = fetch_8k_filings(
@@ -219,6 +220,8 @@ def discover_and_extract_warrant_terms_for_cik(
                 {
                     "accession_number": filing["accession_number"],
                     "document_url": main_document["url"],
+                    "filed_date": filing["filing_date"],
+                    "form_type": filing["form_type"],
                     **observation,
                 }
             )

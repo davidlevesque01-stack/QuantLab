@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from shared.database import get_connection
 
 from collectors.warrants.src.warrants_postgresql import (
+    read_sec_8k_warrant_text_extractions,
     write_sec_8k_warrant_text_extractions,
 )
 
@@ -31,6 +32,8 @@ OBSERVATIONS = [
     {
         "accession_number": "QLTEST-0004",
         "document_url": "https://www.sec.gov/QLTEST-8k.htm",
+        "filed_date": "2098-08-31",
+        "form_type": "8-K",
         "kind": "exercise_price",
         "label": "Each Series A",
         "exercise_price": 5.02,
@@ -69,6 +72,11 @@ def test_sec_8k_warrant_text_extraction_capture_is_idempotent():
 
         assert first_pass == {"inserted": 1, "skipped": 0}
         assert _count_test_rows(conn) == 1
+
+        stored_rows = read_sec_8k_warrant_text_extractions(conn, TEST_CIK)
+        assert len(stored_rows) == 1
+        assert str(stored_rows[0]["filed_date"]) == "2098-08-31"
+        assert stored_rows[0]["form_type"] == "8-K"
 
         second_pass = write_sec_8k_warrant_text_extractions(
             conn,

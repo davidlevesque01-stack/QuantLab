@@ -180,6 +180,11 @@ def test_discover_and_extract_warrant_terms_for_cik_uses_main_document():
     kinds = {observation["kind"] for observation in results}
     assert kinds == {"share_quantity", "exercise_price", "expiration_years"}
     assert all(
+        observation["filed_date"] == "2026-08-31"
+        and observation["form_type"] == "8-K"
+        for observation in results
+    )
+    assert all(
         observation["accession_number"] == "0001213900-26-095686"
         for observation in results
     )

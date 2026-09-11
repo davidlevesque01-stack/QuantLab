@@ -256,3 +256,33 @@ def test_fetch_url_retries_on_url_error():
 
     assert result == b"ok"
     assert mocked_urlopen.call_count == 2
+
+
+def test_fetch_url_retries_on_timeout_error():
+    """
+    Regression test: TimeoutError (raised directly by the ssl/socket
+    layer on a read timeout, observed in production on TNON,
+    2026-09-11) is an OSError but NOT a URLError subclass — it slipped
+    through the original except URLError clause silently uncaught by
+    the retry logic before this was caught and fixed.
+    """
+
+    mock_response = MagicMock()
+    mock_response.read.return_value = b"ok"
+    mock_response.__enter__.return_value = mock_response
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.urlopen",
+        side_effect=[TimeoutError("The read operation timed out"), mock_response],
+    ) as mocked_urlopen, patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.time.sleep",
+    ):
+
+        result = fetch_url(
+            "https://www.sec.gov/x",
+            user_agent="QuantLab test contact@example.com",
+            max_retries=3,
+        )
+
+    assert result == b"ok"
+    assert mocked_urlopen.call_count == 2
