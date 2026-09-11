@@ -15,6 +15,51 @@ from __future__ import annotations
 from shared.database.connection import get_connection
 
 
+def _read_xbrl_facts(conn, table, cik):
+    """
+    Lit toutes les lignes de `table` pour un CIK donné, sous forme de
+    liste de dicts. `table` est toujours un littéral interne connu
+    (jamais une entrée utilisateur) — voir les deux appelants ci-dessous.
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                concept,
+                unit,
+                fact_value,
+                period_start,
+                period_end,
+                form,
+                filed_date,
+                accession_number,
+                fiscal_year,
+                fiscal_period
+            FROM {table}
+            WHERE cik = %s
+            ORDER BY concept, period_end;
+            """,
+            (cik,),
+        )
+
+        columns = [description[0] for description in cur.description]
+
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def read_sec_warrant_xbrl_facts(conn, cik):
+    """Lit raw.sec_warrant_xbrl_fact pour un CIK donné (lecture seule)."""
+
+    return _read_xbrl_facts(conn, "raw.sec_warrant_xbrl_fact", cik)
+
+
+def read_sec_shares_outstanding_facts(conn, cik):
+    """Lit raw.sec_shares_outstanding_fact pour un CIK donné (lecture seule)."""
+
+    return _read_xbrl_facts(conn, "raw.sec_shares_outstanding_fact", cik)
+
+
 def _build_xbrl_fact_rows(cik, observations, retrieved_at):
     """
     Construit les lignes (cik, concept, unit, ...) à insérer à partir
