@@ -145,6 +145,7 @@ Fichiers actuels :
 012_create_sec_8k_warrant_text_extraction_schema.sql
 013_add_filing_date_to_sec_8k_warrant_text_extraction.sql
 014_create_sec_ticker_cik_resolution_schema.sql
+015_create_sec_reverse_split_event_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -409,6 +410,31 @@ traçabilité.
 
 Réutilise le même verrou QuantLab, avec un `objid` distinct :
 `(716203, 8)`.
+
+### 5.17 Migration 015
+
+`015_create_sec_reverse_split_event_schema.sql` crée :
+
+```text
+raw.sec_reverse_split_event
+```
+
+Capture des événements de reverse (ou forward) stock split trouvés dans
+les 8-K (items 3.03/5.03) — le trou de découverte identifié en SEC-11 :
+sans ça, les modalités de warrants déjà capturées dans
+`raw.sec_8k_warrant_text_extraction` ne reflètent que les termes
+d'origine, jamais les termes actuels ajustés. Validé sur un cas réel
+(TNON, 8-K du 2026-08-10) : « 1-for-35 reverse stock split », confirmant
+exactement le ratio ~35x déjà déduit en comparant nos données brutes à
+DilutionTracker sur 3 séries de warrants indépendantes.
+
+Portée volontairement minimale : capture seulement l'événement (ratio,
+date d'effet) — n'applique pas rétroactivement le ratio aux lignes
+`warrant_text_extraction` déjà en base, ce qui nécessiterait un concept
+CORE (différé, lié à WRT-06).
+
+Réutilise le même verrou QuantLab, avec un `objid` distinct :
+`(716203, 9)`.
 
 ---
 
@@ -898,7 +924,8 @@ distinct) pour la capture RAW des faits XBRL de warrants (voir §5.10), et
 `(716203, 5)` pour la découverte d'exhibits de 8-K liés à des warrants
 (§5.12), et `(716203, 6)` pour la capture de l'annuaire Nasdaq (§5.13), et
 `(716203, 7)` pour l'extraction texte des modalités de warrants (§5.14), et
-`(716203, 8)` pour la trace d'audit de résolution ticker→CIK (§5.16).
+`(716203, 8)` pour la trace d'audit de résolution ticker→CIK (§5.16), et
+`(716203, 9)` pour les événements de reverse split (§5.17).
 `objid = 2` est réservé à la capture RAW DilutionTracker (à venir), afin
 de conserver un registre cohérent des verrous entre les sources.
 
