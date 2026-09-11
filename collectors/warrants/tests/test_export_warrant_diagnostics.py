@@ -4,6 +4,7 @@ from unittest.mock import patch
 from collectors.warrants.src.export_warrant_diagnostics import (
     build_diagnostic_rows,
     build_edgar_filing_url,
+    build_exhibit_diagnostic_rows,
     export_diagnostic_rows,
     write_csv,
 )
@@ -57,7 +58,10 @@ def test_export_diagnostic_rows_skips_unresolved_tickers():
     ), patch(
         "collectors.warrants.src.export_warrant_diagnostics.read_sec_shares_outstanding_facts",
         return_value=[],
-    ) as mocked_shares:
+    ) as mocked_shares, patch(
+        "collectors.warrants.src.export_warrant_diagnostics.read_sec_8k_warrant_exhibits",
+        return_value=[],
+    ):
 
         rows = export_diagnostic_rows(
             conn=object(),
@@ -94,12 +98,24 @@ def test_export_diagnostic_rows_combines_both_sources():
         "accession_number": "0001560293-26-000042",
     }
 
+    exhibit = {
+        "accession_number": "0001213900-26-095686",
+        "filing_date": "2026-08-31",
+        "form_type": "8-K",
+        "exhibit_type": "EX-4.1",
+        "description": "FORM OF PRE-FUNDED WARRANT",
+        "document_url": "https://www.sec.gov/.../ex4-1.htm",
+    }
+
     with patch(
         "collectors.warrants.src.export_warrant_diagnostics.read_sec_warrant_xbrl_facts",
         return_value=[warrant_fact],
     ), patch(
         "collectors.warrants.src.export_warrant_diagnostics.read_sec_shares_outstanding_facts",
         return_value=[shares_fact],
+    ), patch(
+        "collectors.warrants.src.export_warrant_diagnostics.read_sec_8k_warrant_exhibits",
+        return_value=[exhibit],
     ):
 
         rows = export_diagnostic_rows(
@@ -108,8 +124,33 @@ def test_export_diagnostic_rows_combines_both_sources():
             ticker_cik_map=ticker_cik_map,
         )
 
-    assert {row["source_table"] for row in rows} == {"warrant", "shares_outstanding"}
-    assert len(rows) == 2
+    assert {row["source_table"] for row in rows} == {
+        "warrant",
+        "shares_outstanding",
+        "8k_warrant_exhibit",
+    }
+    assert len(rows) == 3
+
+
+def test_build_exhibit_diagnostic_rows_uses_document_url_as_filing_url():
+    exhibits = [
+        {
+            "accession_number": "0001213900-26-095686",
+            "filing_date": "2026-08-31",
+            "form_type": "8-K",
+            "exhibit_type": "EX-4.1",
+            "description": "FORM OF PRE-FUNDED WARRANT",
+            "document_url": "https://www.sec.gov/.../ex4-1.htm",
+        }
+    ]
+
+    rows = build_exhibit_diagnostic_rows("TNON", "0001560293", exhibits)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source_table"] == "8k_warrant_exhibit"
+    assert row["description"] == "FORM OF PRE-FUNDED WARRANT"
+    assert row["filing_url"] == "https://www.sec.gov/.../ex4-1.htm"
 
 
 def test_write_csv_round_trip(tmp_path):
