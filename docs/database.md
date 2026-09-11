@@ -138,6 +138,7 @@ Fichiers actuels :
 005_create_nasdaq_resumption.sql
 006_nasdaq_persistence_v1_2.sql
 007_nasdaq_resumption_reason_v1_3.sql
+008_create_sec_warrant_xbrl_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -245,6 +246,34 @@ Elle :
 - valide qu'une observation ne possède pas simultanément les deux reason fields à `NULL`.
 
 La migration 007 a été appliquée avec succès en DEV le 2026-09-06.
+
+### 5.10 Migration 008
+
+`008_create_sec_warrant_xbrl_schema.sql` crée :
+
+```text
+raw.sec_warrant_xbrl_fact
+```
+
+Capture RAW immuable des faits XBRL us-gaap dont le concept commence par
+`ClassOfWarrantOrRight` (exercise price, quantité, etc.), retournés par
+l'API SEC EDGAR company-facts pour un CIK donné — première brique du
+pipeline SEC-natif de découverte des warrants (SEC-06). Ne couvre que les
+émetteurs qui balisent leurs warrants dimensionnellement en XBRL
+(typiquement les ex-SPAC) ; le repli sur le texte des filings pour les
+émetteurs non taggués reste un travail de suivi distinct.
+
+Elle :
+
+- utilise `UNIQUE NULLS NOT DISTINCT` (les faits « instant » n'ont pas de
+  `period_start`, qui doit tout de même participer à l'identité de
+  l'observation);
+- réutilise le verrou QuantLab `(716203, 3)` côté écrivain Python
+  (`warrants_postgresql.persist_sec_warrant_xbrl_facts`), sans verrou dans
+  la migration elle-même (simple création de table, aucune donnée
+  existante à migrer).
+
+La migration 008 a été appliquée avec succès en DEV le 2026-09-11.
 
 ---
 
@@ -727,6 +756,11 @@ Le verrou est transactionnel.
 Il est acquis avant les lectures/écritures Nasdaq et libéré automatiquement au `COMMIT` ou au `ROLLBACK`.
 
 La migration 006 utilise le même verrou.
+
+Le composant warrants réserve `(716203, 3)` (`classid` partagé, `objid`
+distinct) pour la capture RAW des faits XBRL SEC (voir §5.10). `objid = 2`
+est réservé à la capture RAW DilutionTracker (à venir), afin de conserver
+un registre cohérent des verrous entre les sources.
 
 Un test avec deux connexions PostgreSQL indépendantes a validé qu'une seconde transaction attend la libération du verrou.
 
