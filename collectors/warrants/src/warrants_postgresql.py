@@ -8,6 +8,7 @@ nasdaq_halts) :
     (716203, 5) -> warrants / SEC 8-K warrant exhibit discovery RAW capture
     (716203, 6) -> warrants / Nasdaq symbol directory RAW capture
     (716203, 7) -> warrants / SEC 8-K warrant text extraction RAW capture
+    (716203, 8) -> warrants / SEC ticker->CIK resolution audit trail RAW capture
 
 L'objid 2 est réservé pour la capture RAW DilutionTracker (WRT-04b, à
 venir) afin de conserver un registre cohérent entre les sources.
@@ -616,3 +617,128 @@ def persist_sec_8k_warrant_text_extractions(cik, observations, retrieved_at):
             observations,
             retrieved_at,
         )
+
+
+def read_sec_ticker_cik_resolutions(conn, ticker):
+    """Lit raw.sec_ticker_cik_resolution pour un ticker donné (lecture seule)."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                cik,
+                resolution_method,
+                issuer_name_used,
+                matched_name,
+                retrieved_at
+            FROM raw.sec_ticker_cik_resolution
+            WHERE ticker = %s
+            ORDER BY retrieved_at;
+            """,
+            (ticker,),
+        )
+
+        columns = [description[0] for description in cur.description]
+
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def write_sec_ticker_cik_resolution(conn, resolution, retrieved_at):
+    """
+    Insère dans raw.sec_ticker_cik_resolution une décision de résolution
+    (voir sec_cik_resolution.resolve_cik_with_fallback), sur une
+    connexion/transaction fournie par l'appelant (ne commit pas).
+
+    Capture RAW immuable : une réingestion identique est un no-op
+    (ON CONFLICT DO NOTHING).
+    """
+
+    row = (
+        resolution["ticker"],
+        resolution.get("cik"),
+        resolution["method"],
+        resolution.get("issuer_name_used"),
+        resolution.get("matched_name"),
+        retrieved_at,
+    )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw.sec_ticker_cik_resolution (
+                ticker,
+                cik,
+                resolution_method,
+                issuer_name_used,
+                matched_name,
+                retrieved_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (
+                ticker,
+                retrieved_at
+            ) DO NOTHING;
+            """,
+            row,
+        )
+
+        inserted = cur.rowcount
+
+    return {
+        "inserted": inserted,
+        "skipped": 1 - inserted,
+    }
+
+
+def persist_sec_ticker_cik_resolution(resolution, retrieved_at):
+    """
+    Ouvre sa propre connexion, prend le verrou advisory (716203, 8) et
+    persiste une décision de résolution ticker->CIK (commit à la sortie
+    du context manager).
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 8),
+            )
+
+        return write_sec_ticker_cik_resolution(
+            conn,
+            resolution,
+            retrieved_at,
+        )
+
+
+def read_issue_names_for_tickers(conn, tickers):
+    """
+    Lit core.nasdaq_halt_episode.issue_name pour une liste de tickers
+    (lecture seule) — la source de nom d'émetteur déjà connue et fiable
+    utilisée comme repli de résolution CIK (SEC-14), pour ne jamais
+    deviner un nom de société.
+
+    Retourne {ticker: issue_name}, en prenant le nom le plus récent en
+    cas de plusieurs épisodes HALT pour un même symbole.
+    """
+
+    if not tickers:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (symbol)
+                symbol,
+                issue_name
+            FROM core.nasdaq_halt_episode
+            WHERE symbol = ANY(%s)
+              AND issue_name IS NOT NULL
+            ORDER BY symbol, halt_start DESC;
+            """,
+            (list(tickers),),
+        )
+
+        return {symbol: issue_name for symbol, issue_name in cur.fetchall()}

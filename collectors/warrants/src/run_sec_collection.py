@@ -1,11 +1,17 @@
-"""CLI de backfill réel SEC-natif (SEC-07, étendu par SEC-09).
+"""CLI de backfill réel SEC-natif (SEC-07, étendu par SEC-09/SEC-10/SEC-14).
 
 Exécute pour de vrai (pas en rollback) collect_ticker_warrants,
-collect_ticker_shares_outstanding et collect_ticker_8k_warrant_exhibits
-sur une liste de tickers fournie par l'appelant, pour peupler
-raw.sec_warrant_xbrl_fact, raw.sec_shares_outstanding_fact et
-raw.sec_8k_warrant_exhibit avec de vraies données avant validation
-visuelle (SEC-08).
+collect_ticker_shares_outstanding, collect_ticker_8k_warrant_exhibits et
+collect_ticker_8k_warrant_text_extraction sur une liste de tickers
+fournie par l'appelant, pour peupler raw.sec_warrant_xbrl_fact,
+raw.sec_shares_outstanding_fact, raw.sec_8k_warrant_exhibit et
+raw.sec_8k_warrant_text_extraction avec de vraies données avant
+validation visuelle (SEC-08).
+
+La carte ticker -> CIK est augmentée avant collecte (SEC-14) : un
+ticker absent de company_tickers.json (émetteur radié/acquis depuis)
+est résolu par repli via recherche de nom, en utilisant
+core.nasdaq_halt_episode.issue_name comme source de nom fiable.
 
 Usage :
     python -m collectors.warrants.src.run_sec_collection --tickers TNON,ABCD
@@ -25,6 +31,9 @@ from collectors.warrants.src.sec_8k_warrant_text_extraction_collector import (
     collect_ticker_8k_warrant_text_extraction,
 )
 from collectors.warrants.src.sec_cik_resolution import fetch_ticker_cik_map
+from collectors.warrants.src.sec_ticker_universe_resolution import (
+    build_augmented_ticker_cik_map,
+)
 from collectors.warrants.src.sec_shares_outstanding_collector import (
     collect_ticker_shares_outstanding,
 )
@@ -170,6 +179,13 @@ def main():
     tickers = parse_tickers(args.tickers)
 
     ticker_cik_map = fetch_ticker_cik_map(
+        user_agent=user_agent,
+        timeout_seconds=args.timeout_seconds,
+    )
+
+    ticker_cik_map = build_augmented_ticker_cik_map(
+        tickers,
+        ticker_cik_map,
         user_agent=user_agent,
         timeout_seconds=args.timeout_seconds,
     )
