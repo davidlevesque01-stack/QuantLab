@@ -5,6 +5,7 @@ nasdaq_halts) :
     (716203, 1) -> nasdaq_halts
     (716203, 3) -> warrants / SEC warrant XBRL RAW capture
     (716203, 4) -> warrants / SEC shares outstanding XBRL RAW capture
+    (716203, 5) -> warrants / SEC 8-K warrant exhibit discovery RAW capture
 
 L'objid 2 est réservé pour la capture RAW DilutionTracker (WRT-04b, à
 venir) afin de conserver un registre cohérent entre les sources.
@@ -252,5 +253,131 @@ def persist_sec_shares_outstanding_facts(cik, observations, retrieved_at):
             conn,
             cik,
             observations,
+            retrieved_at,
+        )
+
+
+def read_sec_8k_warrant_exhibits(conn, cik):
+    """Lit raw.sec_8k_warrant_exhibit pour un CIK donné (lecture seule)."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                accession_number,
+                filing_date,
+                form_type,
+                item_codes,
+                exhibit_seq,
+                exhibit_type,
+                description,
+                document_url,
+                filing_index_url
+            FROM raw.sec_8k_warrant_exhibit
+            WHERE cik = %s
+            ORDER BY filing_date, exhibit_seq;
+            """,
+            (cik,),
+        )
+
+        columns = [description[0] for description in cur.description]
+
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def write_sec_8k_warrant_exhibits(conn, cik, exhibits, retrieved_at):
+    """
+    Insère dans raw.sec_8k_warrant_exhibit les exhibits de 8-K
+    probablement liés à un warrant (voir
+    sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik), sur une
+    connexion/transaction fournie par l'appelant (ne commit pas).
+
+    Capture RAW immuable : une réingestion identique est un no-op
+    (ON CONFLICT DO NOTHING).
+    """
+
+    rows = []
+    seen = set()
+
+    for exhibit in exhibits:
+
+        row = (
+            cik,
+            exhibit["accession_number"],
+            exhibit.get("filing_date"),
+            exhibit.get("form_type"),
+            exhibit.get("item_codes"),
+            exhibit["exhibit_seq"],
+            exhibit.get("exhibit_type"),
+            exhibit.get("description"),
+            exhibit["document_url"],
+            exhibit.get("filing_index_url"),
+            retrieved_at,
+        )
+
+        key = (cik, exhibit["accession_number"], exhibit["exhibit_seq"])
+
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+
+    if not rows:
+        return {"inserted": 0, "skipped": 0}
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO raw.sec_8k_warrant_exhibit (
+                cik,
+                accession_number,
+                filing_date,
+                form_type,
+                item_codes,
+                exhibit_seq,
+                exhibit_type,
+                description,
+                document_url,
+                filing_index_url,
+                retrieved_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (
+                cik,
+                accession_number,
+                exhibit_seq
+            ) DO NOTHING;
+            """,
+            rows,
+        )
+
+        inserted = cur.rowcount
+
+    return {
+        "inserted": inserted,
+        "skipped": len(rows) - inserted,
+    }
+
+
+def persist_sec_8k_warrant_exhibits(cik, exhibits, retrieved_at):
+    """
+    Ouvre sa propre connexion, prend le verrou advisory (716203, 5) et
+    persiste les exhibits de warrants découverts pour un CIK (commit à
+    la sortie du context manager).
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 5),
+            )
+
+        return write_sec_8k_warrant_exhibits(
+            conn,
+            cik,
+            exhibits,
             retrieved_at,
         )

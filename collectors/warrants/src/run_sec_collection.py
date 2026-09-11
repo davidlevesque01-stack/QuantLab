@@ -1,9 +1,10 @@
-"""CLI de backfill réel SEC-natif (SEC-07).
+"""CLI de backfill réel SEC-natif (SEC-07, étendu par SEC-09).
 
-Exécute pour de vrai (pas en rollback) collect_ticker_warrants et
-collect_ticker_shares_outstanding sur une liste de tickers fournie par
-l'appelant, pour peupler raw.sec_warrant_xbrl_fact et
-raw.sec_shares_outstanding_fact avec de vraies données avant validation
+Exécute pour de vrai (pas en rollback) collect_ticker_warrants,
+collect_ticker_shares_outstanding et collect_ticker_8k_warrant_exhibits
+sur une liste de tickers fournie par l'appelant, pour peupler
+raw.sec_warrant_xbrl_fact, raw.sec_shares_outstanding_fact et
+raw.sec_8k_warrant_exhibit avec de vraies données avant validation
 visuelle (SEC-08).
 
 Usage :
@@ -17,6 +18,9 @@ from __future__ import annotations
 import argparse
 import os
 
+from collectors.warrants.src.sec_8k_warrant_exhibit_collector import (
+    collect_ticker_8k_warrant_exhibits,
+)
 from collectors.warrants.src.sec_cik_resolution import fetch_ticker_cik_map
 from collectors.warrants.src.sec_shares_outstanding_collector import (
     collect_ticker_shares_outstanding,
@@ -80,11 +84,19 @@ def run_collection(
             timeout_seconds=timeout_seconds,
         )
 
+        exhibits_result = collect_ticker_8k_warrant_exhibits(
+            ticker,
+            ticker_cik_map,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
+
         results.append(
             {
                 "ticker": ticker,
                 "warrants": warrant_result,
                 "shares_outstanding": shares_result,
+                "warrant_exhibits": exhibits_result,
             }
         )
 
@@ -162,6 +174,7 @@ def main():
         print(f"--- {result['ticker']} ---")
         print(f"  warrants:           {result['warrants']}")
         print(f"  shares_outstanding: {result['shares_outstanding']}")
+        print(f"  warrant_exhibits:   {result['warrant_exhibits']}")
 
 
 if __name__ == "__main__":

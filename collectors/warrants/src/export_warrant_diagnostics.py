@@ -21,6 +21,7 @@ from collectors.warrants.src.sec_cik_resolution import (
     resolve_cik,
 )
 from collectors.warrants.src.warrants_postgresql import (
+    read_sec_8k_warrant_exhibits,
     read_sec_shares_outstanding_facts,
     read_sec_warrant_xbrl_facts,
 )
@@ -37,6 +38,7 @@ FIELDNAMES = [
     "cik",
     "source_table",
     "concept",
+    "description",
     "unit",
     "value",
     "period_start",
@@ -105,6 +107,38 @@ def build_diagnostic_rows(ticker, cik, source_table, facts):
     return rows
 
 
+def build_exhibit_diagnostic_rows(ticker, cik, exhibits):
+    """
+    Aplatit les exhibits de warrants découverts via 8-K (SEC-09) en
+    lignes CSV — le lien pointe directement vers le document de
+    l'exhibit (pas l'index du filing), puisqu'on le connaît déjà.
+    """
+
+    rows = []
+
+    for exhibit in exhibits:
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "cik": cik,
+                "source_table": "8k_warrant_exhibit",
+                "concept": exhibit.get("exhibit_type"),
+                "description": exhibit.get("description"),
+                "unit": None,
+                "value": None,
+                "period_start": None,
+                "period_end": None,
+                "form": exhibit.get("form_type"),
+                "filed_date": exhibit.get("filing_date"),
+                "accession_number": exhibit.get("accession_number"),
+                "filing_url": exhibit.get("document_url"),
+            }
+        )
+
+    return rows
+
+
 def export_diagnostic_rows(conn, tickers, ticker_cik_map):
     """
     Pour chaque ticker résolu vers un CIK, lit les faits warrants et
@@ -136,6 +170,11 @@ def export_diagnostic_rows(conn, tickers, ticker_cik_map):
                 "shares_outstanding",
                 shares_facts,
             )
+        )
+
+        warrant_exhibits = read_sec_8k_warrant_exhibits(conn, cik)
+        rows.extend(
+            build_exhibit_diagnostic_rows(ticker, cik, warrant_exhibits)
         )
 
     return rows
