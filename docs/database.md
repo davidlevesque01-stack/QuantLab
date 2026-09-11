@@ -144,6 +144,7 @@ Fichiers actuels :
 011_create_nasdaq_symbol_directory_schema.sql
 012_create_sec_8k_warrant_text_extraction_schema.sql
 013_add_filing_date_to_sec_8k_warrant_text_extraction.sql
+014_create_sec_ticker_cik_resolution_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -386,6 +387,28 @@ les a. Migration additive (`ADD COLUMN IF NOT EXISTS`), non destructive
 — les lignes déjà capturées restent avec ces colonnes à `NULL` jusqu'à
 réingestion (`ON CONFLICT DO NOTHING` ne les met pas à jour ; un
 backfill nécessite de supprimer puis recollecter les lignes concernées).
+
+### 5.16 Migration 014
+
+`014_create_sec_ticker_cik_resolution_schema.sql` crée :
+
+```text
+raw.sec_ticker_cik_resolution
+```
+
+Trace d'audit de chaque décision de résolution ticker → CIK (SEC-14) —
+`ticker_map` (correspondance directe via `company_tickers.json`),
+`name_search` (repli par recherche de nom pour un émetteur radié/acquis
+depuis, absent du fichier SEC actif), ou `not_found`. Découvert en
+validant l'univers HALT : ~75 % d'un échantillon aléatoire de tickers
+historiques n'étaient pas résolvables directement (radiations/rachats
+depuis leur épisode HALT). Une correspondance par nom est inférentielle
+— chaque ligne conserve `issuer_name_used`/`matched_name` pour
+vérification humaine, jamais traitée comme une valeur canonique sans
+traçabilité.
+
+Réutilise le même verrou QuantLab, avec un `objid` distinct :
+`(716203, 8)`.
 
 ---
 
@@ -874,7 +897,8 @@ distinct) pour la capture RAW des faits XBRL de warrants (voir §5.10), et
 `(716203, 4)` pour la capture RAW des shares outstanding (§5.11), et
 `(716203, 5)` pour la découverte d'exhibits de 8-K liés à des warrants
 (§5.12), et `(716203, 6)` pour la capture de l'annuaire Nasdaq (§5.13), et
-`(716203, 7)` pour l'extraction texte des modalités de warrants (§5.14).
+`(716203, 7)` pour l'extraction texte des modalités de warrants (§5.14), et
+`(716203, 8)` pour la trace d'audit de résolution ticker→CIK (§5.16).
 `objid = 2` est réservé à la capture RAW DilutionTracker (à venir), afin
 de conserver un registre cohérent des verrous entre les sources.
 
