@@ -116,6 +116,35 @@ confirmed in SEC-11 (original issuance quantities in `raw.sec_8k_warrant_text_ex
 
 ## GPUS (CIK 0000896493)
 
+### SEC-12/SEC-13 real backfill validation (2026-09-11)
+
+Real (non-rollback) runs of `run_sec_collection.py --tickers GPUS`, split across two attempts
+(the first ran silently and was interrupted mid-`warrant_text_extraction` — see progress-logging
+addition above — but had already completed and persisted the `warrants`/`shares_outstanding`/
+`warrant_exhibits` steps by then; the second, later run picked up where it left off).
+
+`fetch_all_8k_filings` retrieves GPUS's full 627 8-K filings back to **1998-02-10** (vs. 40
+filings back to 2025-10-17 under the old fixed count) — 241 of those match items 1.01/3.02.
+
+Confirmed new discoveries, all previously invisible under the old 40-filing cap and/or
+description-only exhibit matching:
+
+- **SEC-13 (EX-4.x fallback) confirmed**, 5 exhibits, all bare `EXHIBIT 4.x` titles with no
+  "warrant" text, `match_reason = exhibit_type`:
+  - 2023-11-07 (accession 0001214659-23-014653, EX-4.1) — matches the ground truth's "October
+    2023 Warrants" / "November 2023 Warrants" era.
+  - 2023-10-16 (accession 0001214659-23-013465, EX-4.1 and EX-4.2).
+  - 2021-12-22 (accession 0001214659-21-013530, EX-4.1) and 2021-12-16 (accession
+    0001214659-21-013284, EX-4.1) — matches "December 2021 Note Class A/B Warrants".
+- **SEC-12 (full history) confirmed**, two facts from **2019**, far beyond the old 40-filing
+  window:
+  - `raw.sec_8k_warrant_text_extraction`: a pre-funded warrant, 12,700,000 shares, filed
+    2019-04-01 (accession 0001214659-19-002393).
+  - `raw.sec_reverse_split_event`: a **1-for-20** reverse split filed 2019-03-14 — a THIRD
+    known split (alongside TNON's two), reinforcing that `effective_date` extraction gaps are a
+    recurring pattern on older filings (NULL here too, same as TNON's 2023-11-07 split), not a
+    one-off quirk of a single document's phrasing.
+
 ### Warrants
 
 Several show `Total Issued: 0` — never exercised, likely expired/cancelled; still worth
