@@ -141,6 +141,7 @@ Fichiers actuels :
 008_create_sec_warrant_xbrl_schema.sql
 009_create_sec_shares_outstanding_schema.sql
 010_create_sec_8k_warrant_exhibit_schema.sql
+011_create_nasdaq_symbol_directory_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -313,6 +314,29 @@ DilutionTracker (exercise price $5.02, 1 058 517 unités, expiration
 source (8-K du 2026-08-31, `EX-4.1`) est désormais capturé ici.
 
 Réutilise le même verrou QuantLab, avec un `objid` distinct : `(716203, 5)`.
+
+### 5.13 Migration 011
+
+`011_create_nasdaq_symbol_directory_schema.sql` crée :
+
+```text
+raw.nasdaq_symbol_directory
+```
+
+Capture point-in-time des deux fichiers annuaire quotidiens de Nasdaq
+Trader (`nasdaqlisted.txt`, `otherlisted.txt`, ~13 000 titres au total) —
+l'univers de référence des sociétés/titres à suivre (SEC-03). Nasdaq
+Trader n'apporte que l'identité/le listing, jamais les modalités de
+warrants.
+
+Elle :
+
+- insère un nouveau snapshot horodaté à chaque exécution plutôt que de
+  mettre à jour en place (principe point-in-time du projet) ;
+- conserve le payload JSONB brut de chaque ligne, les deux fichiers
+  n'ayant pas le même jeu de colonnes ;
+- réutilise le même verrou QuantLab, avec un `objid` distinct :
+  `(716203, 6)`.
 
 ---
 
@@ -800,9 +824,9 @@ Le composant warrants réserve `(716203, 3)` (`classid` partagé, `objid`
 distinct) pour la capture RAW des faits XBRL de warrants (voir §5.10), et
 `(716203, 4)` pour la capture RAW des shares outstanding (§5.11), et
 `(716203, 5)` pour la découverte d'exhibits de 8-K liés à des warrants
-(§5.12). `objid = 2` est réservé à la capture RAW DilutionTracker (à
-venir), afin de conserver un registre cohérent des verrous entre les
-sources.
+(§5.12), et `(716203, 6)` pour la capture de l'annuaire Nasdaq (§5.13).
+`objid = 2` est réservé à la capture RAW DilutionTracker (à venir), afin
+de conserver un registre cohérent des verrous entre les sources.
 
 Un test avec deux connexions PostgreSQL indépendantes a validé qu'une seconde transaction attend la libération du verrou.
 

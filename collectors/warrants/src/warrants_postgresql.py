@@ -6,12 +6,15 @@ nasdaq_halts) :
     (716203, 3) -> warrants / SEC warrant XBRL RAW capture
     (716203, 4) -> warrants / SEC shares outstanding XBRL RAW capture
     (716203, 5) -> warrants / SEC 8-K warrant exhibit discovery RAW capture
+    (716203, 6) -> warrants / Nasdaq symbol directory RAW capture
 
 L'objid 2 est réservé pour la capture RAW DilutionTracker (WRT-04b, à
 venir) afin de conserver un registre cohérent entre les sources.
 """
 
 from __future__ import annotations
+
+from psycopg.types.json import Jsonb
 
 from shared.database.connection import get_connection
 
@@ -379,5 +382,106 @@ def persist_sec_8k_warrant_exhibits(cik, exhibits, retrieved_at):
             conn,
             cik,
             exhibits,
+            retrieved_at,
+        )
+
+
+def write_nasdaq_symbol_directory(conn, records, retrieved_at):
+    """
+    Insère dans raw.nasdaq_symbol_directory un snapshot horodaté de
+    l'annuaire des titres (voir nasdaq_symbol_directory.fetch_and_parse_symbol_directory),
+    sur une connexion/transaction fournie par l'appelant (ne commit pas).
+
+    Capture RAW immuable : chaque exécution insère un nouveau snapshot
+    (pas de mise à jour en place) — cohérent avec le principe
+    point-in-time du projet. Idempotent à l'intérieur d'une même
+    exécution (ON CONFLICT DO NOTHING sur symbol/source_file/retrieved_at).
+    """
+
+    rows = []
+    seen = set()
+
+    for record in records:
+
+        row = (
+            record["symbol"],
+            record["source_file"],
+            record.get("security_name"),
+            record.get("exchange"),
+            record.get("test_issue"),
+            _parse_int_or_none(record.get("round_lot_size")),
+            record.get("etf"),
+            Jsonb(record.get("payload") or {}),
+            retrieved_at,
+        )
+
+        key = (record["symbol"], record["source_file"])
+
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+
+    if not rows:
+        return {"inserted": 0, "skipped": 0}
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO raw.nasdaq_symbol_directory (
+                symbol,
+                source_file,
+                security_name,
+                exchange,
+                test_issue,
+                round_lot_size,
+                etf,
+                payload,
+                retrieved_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s
+            )
+            ON CONFLICT (
+                symbol,
+                source_file,
+                retrieved_at
+            ) DO NOTHING;
+            """,
+            rows,
+        )
+
+        inserted = cur.rowcount
+
+    return {
+        "inserted": inserted,
+        "skipped": len(rows) - inserted,
+    }
+
+
+def _parse_int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def persist_nasdaq_symbol_directory(records, retrieved_at):
+    """
+    Ouvre sa propre connexion, prend le verrou advisory (716203, 6) et
+    persiste le snapshot de l'annuaire Nasdaq (commit à la sortie du
+    context manager).
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s);",
+                (716203, 6),
+            )
+
+        return write_nasdaq_symbol_directory(
+            conn,
+            records,
             retrieved_at,
         )
