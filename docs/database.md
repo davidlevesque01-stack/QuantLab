@@ -142,6 +142,7 @@ Fichiers actuels :
 009_create_sec_shares_outstanding_schema.sql
 010_create_sec_8k_warrant_exhibit_schema.sql
 011_create_nasdaq_symbol_directory_schema.sql
+012_create_sec_8k_warrant_text_extraction_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -337,6 +338,34 @@ Elle :
   n'ayant pas le même jeu de colonnes ;
 - réutilise le même verrou QuantLab, avec un `objid` distinct :
   `(716203, 6)`.
+
+### 5.14 Migration 012
+
+`012_create_sec_8k_warrant_text_extraction_schema.sql` crée :
+
+```text
+raw.sec_8k_warrant_text_extraction
+```
+
+Extraction heuristique par expressions régulières des modalités de
+warrants (quantité, prix d'exercice, expiration) trouvées dans le texte
+du **corps** du 8-K (SEC-10) — découverte importante lors de la
+validation TNON : les exhibits « FORM OF ... WARRANT » (capturés par
+SEC-09) sont des **gabarits vides** (`[*]`, `______`), les vraies
+valeurs vivent dans le récit de l'Item 1.01. Validé sur ce cas réel :
+« Series A warrants to purchase up to an aggregate of 1,058,517 shares
+... exercise price of $5.02 per share ... will expire five (5) years
+from issuance » — correspond exactement à DilutionTracker.
+
+Elle :
+
+- conserve `raw_snippet` (le texte source exact) sur chaque ligne —
+  cette extraction est heuristique, jamais une valeur canonique sans
+  vérification humaine ;
+- contrainte `kind` à `share_quantity` / `exercise_price` /
+  `expiration_years` (`CHECK`) ;
+- réutilise le même verrou QuantLab, avec un `objid` distinct :
+  `(716203, 7)`.
 
 ---
 
@@ -824,7 +853,8 @@ Le composant warrants réserve `(716203, 3)` (`classid` partagé, `objid`
 distinct) pour la capture RAW des faits XBRL de warrants (voir §5.10), et
 `(716203, 4)` pour la capture RAW des shares outstanding (§5.11), et
 `(716203, 5)` pour la découverte d'exhibits de 8-K liés à des warrants
-(§5.12), et `(716203, 6)` pour la capture de l'annuaire Nasdaq (§5.13).
+(§5.12), et `(716203, 6)` pour la capture de l'annuaire Nasdaq (§5.13), et
+`(716203, 7)` pour l'extraction texte des modalités de warrants (§5.14).
 `objid = 2` est réservé à la capture RAW DilutionTracker (à venir), afin
 de conserver un registre cohérent des verrous entre les sources.
 

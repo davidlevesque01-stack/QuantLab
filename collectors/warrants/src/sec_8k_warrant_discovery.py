@@ -15,10 +15,11 @@ plus risqué à bien faire sans avoir vu plusieurs gabarits réels.
 from __future__ import annotations
 
 import re
+import time
 from html.parser import HTMLParser
-from xml.etree import ElementTree
-
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
@@ -27,14 +28,44 @@ WARRANT_ITEM_CODES = ("1.01", "3.02")
 
 WARRANT_DESCRIPTION_PATTERN = re.compile(r"warrant", re.IGNORECASE)
 
+RETRYABLE_HTTP_STATUS_CODES = {500, 502, 503, 504}
 
-def fetch_url(url, *, user_agent, timeout_seconds=30):
-    """Requête HTTP brute avec le User-Agent requis par SEC."""
+
+def fetch_url(
+    url,
+    *,
+    user_agent,
+    timeout_seconds=30,
+    max_retries=3,
+    retry_delay_seconds=2,
+):
+    """
+    Requête HTTP brute avec le User-Agent requis par SEC.
+
+    Réessaie avec un backoff linéaire simple sur les erreurs
+    transitoires (5xx, erreurs réseau) — SEC.gov renvoie occasionnellement
+    un 503 même en conditions d'usage normales (observé en pratique sur
+    GPUS, 2026-09-11). Les erreurs non transitoires (404, etc.) sont
+    levées immédiatement, sans réessai.
+    """
 
     request = Request(url, headers={"User-Agent": user_agent})
 
-    with urlopen(request, timeout=timeout_seconds) as response:
-        return response.read()
+    for attempt in range(max_retries + 1):
+
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                return response.read()
+
+        except HTTPError as error:
+            if error.code not in RETRYABLE_HTTP_STATUS_CODES or attempt == max_retries:
+                raise
+
+        except URLError:
+            if attempt == max_retries:
+                raise
+
+        time.sleep(retry_delay_seconds * (attempt + 1))
 
 
 def build_8k_filings_feed_url(cik, count=40):
@@ -203,6 +234,15 @@ def parse_filing_index_documents(index_html_bytes):
             continue
 
         url = href
+
+        # Documents with inline XBRL link to the interactive viewer
+        # ("/ix?doc=/Archives/...") rather than the raw document — unwrap
+        # it so callers always get the actual document, not the viewer
+        # shell page.
+        ix_doc_prefix = "/ix?doc="
+        if url.startswith(ix_doc_prefix):
+            url = url[len(ix_doc_prefix):]
+
         if url.startswith("/"):
             url = f"https://www.sec.gov{url}"
 
@@ -228,6 +268,31 @@ def filter_warrant_exhibits(documents):
         for document in documents
         if WARRANT_DESCRIPTION_PATTERN.search(document.get("description") or "")
     ]
+
+
+def find_main_document(documents):
+    """
+    Retourne le document principal d'un filing (celui qui n'est pas un
+    exhibit numéroté EX-x.x) — typiquement celui avec le plus petit
+    "seq" (habituellement 1). Retourne None si aucun document non-exhibit
+    n'est trouvé.
+
+    C'est ce document, et non les exhibits "FORM OF ... WARRANT", qui
+    porte les modalités réelles d'un placement de warrants (voir
+    sec_8k_warrant_text_extraction.py) — les exhibits sont des gabarits
+    avec des blancs.
+    """
+
+    non_exhibit_docs = [
+        document
+        for document in documents
+        if not (document.get("exhibit_type") or "").upper().startswith("EX-")
+    ]
+
+    if not non_exhibit_docs:
+        return None
+
+    return min(non_exhibit_docs, key=lambda document: document["seq"])
 
 
 def discover_warrant_exhibits_for_cik(cik, *, user_agent, timeout_seconds=30):
