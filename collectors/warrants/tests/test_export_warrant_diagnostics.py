@@ -177,6 +177,8 @@ def test_build_text_extraction_diagnostic_rows_picks_value_by_kind():
         {
             "accession_number": "0001213900-26-095686",
             "document_url": "https://www.sec.gov/.../ea0303883-8k_tenon.htm",
+            "filed_date": "2026-08-31",
+            "form_type": "8-K",
             "kind": "exercise_price",
             "label": "Each Series A",
             "share_quantity": None,
@@ -204,6 +206,8 @@ def test_build_text_extraction_diagnostic_rows_picks_value_by_kind():
     assert price_row["value"] == 5.02
     assert price_row["unit"] == "USD"
     assert price_row["source_table"] == "8k_warrant_text_extraction"
+    assert price_row["filed_date"] == "2026-08-31"
+    assert price_row["form"] == "8-K"
     assert "raw_snippet" in price_row
 
     qty_row = next(row for row in rows if row["concept"] == "share_quantity")

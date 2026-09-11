@@ -143,6 +143,7 @@ Fichiers actuels :
 010_create_sec_8k_warrant_exhibit_schema.sql
 011_create_nasdaq_symbol_directory_schema.sql
 012_create_sec_8k_warrant_text_extraction_schema.sql
+013_add_filing_date_to_sec_8k_warrant_text_extraction.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -366,6 +367,25 @@ Elle :
   `expiration_years` (`CHECK`) ;
 - réutilise le même verrou QuantLab, avec un `objid` distinct :
   `(716203, 7)`.
+
+### 5.15 Migration 013
+
+`013_add_filing_date_to_sec_8k_warrant_text_extraction.sql` ajoute à
+`raw.sec_8k_warrant_text_extraction` :
+
+```text
+filed_date DATE
+form_type VARCHAR(20)
+```
+
+Correctif : trouvé lors d'une revue manuelle de l'export CSV — la date
+et le formulaire du filing étaient disponibles au moment de l'extraction
+(`fetch_8k_filings`) mais n'avaient jamais été propagés jusqu'à la
+persistance, contrairement à `raw.sec_8k_warrant_exhibit` (§5.12) qui
+les a. Migration additive (`ADD COLUMN IF NOT EXISTS`), non destructive
+— les lignes déjà capturées restent avec ces colonnes à `NULL` jusqu'à
+réingestion (`ON CONFLICT DO NOTHING` ne les met pas à jour ; un
+backfill nécessite de supprimer puis recollecter les lignes concernées).
 
 ---
 

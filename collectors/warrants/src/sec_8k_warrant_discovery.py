@@ -43,10 +43,16 @@ def fetch_url(
     Requête HTTP brute avec le User-Agent requis par SEC.
 
     Réessaie avec un backoff linéaire simple sur les erreurs
-    transitoires (5xx, erreurs réseau) — SEC.gov renvoie occasionnellement
-    un 503 même en conditions d'usage normales (observé en pratique sur
-    GPUS, 2026-09-11). Les erreurs non transitoires (404, etc.) sont
-    levées immédiatement, sans réessai.
+    transitoires (5xx, timeouts, erreurs réseau) — SEC.gov renvoie
+    occasionnellement un 503 même en conditions d'usage normales
+    (observé en pratique sur GPUS, 2026-09-11), et un timeout de
+    lecture SSL/socket est apparu séparément sur TNON (2026-09-11).
+    Les erreurs non transitoires (404, etc.) sont levées immédiatement,
+    sans réessai.
+
+    `URLError` et `TimeoutError` sont tous deux des `OSError` (mais
+    `TimeoutError` n'hérite PAS de `URLError`) — capturer `OSError`
+    couvre les deux, en plus des resets de connexion.
     """
 
     request = Request(url, headers={"User-Agent": user_agent})
@@ -61,7 +67,7 @@ def fetch_url(
             if error.code not in RETRYABLE_HTTP_STATUS_CODES or attempt == max_retries:
                 raise
 
-        except URLError:
+        except OSError:
             if attempt == max_retries:
                 raise
 

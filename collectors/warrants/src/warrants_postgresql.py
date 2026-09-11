@@ -497,6 +497,8 @@ def read_sec_8k_warrant_text_extractions(conn, cik):
             SELECT
                 accession_number,
                 document_url,
+                filed_date,
+                form_type,
                 kind,
                 label,
                 share_quantity,
@@ -535,6 +537,8 @@ def write_sec_8k_warrant_text_extractions(conn, cik, observations, retrieved_at)
             cik,
             observation["accession_number"],
             observation["document_url"],
+            observation.get("filed_date"),
+            observation.get("form_type"),
             observation["kind"],
             observation.get("label"),
             observation.get("share_quantity"),
@@ -560,6 +564,8 @@ def write_sec_8k_warrant_text_extractions(conn, cik, observations, retrieved_at)
                 cik,
                 accession_number,
                 document_url,
+                filed_date,
+                form_type,
                 kind,
                 label,
                 share_quantity,
@@ -570,7 +576,7 @@ def write_sec_8k_warrant_text_extractions(conn, cik, observations, retrieved_at)
             )
             VALUES (
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (
                 cik,
