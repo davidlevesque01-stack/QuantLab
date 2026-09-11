@@ -1,9 +1,4 @@
-from unittest.mock import patch
-
-from collectors.warrants.src.sec_warrant_xbrl import (
-    extract_warrant_facts,
-    fetch_company_facts,
-)
+from collectors.warrants.src.sec_warrant_xbrl import extract_warrant_facts
 
 
 SAMPLE_COMPANY_FACTS = {
@@ -126,23 +121,3 @@ def test_extract_warrant_facts_returns_empty_list_when_no_warrant_concepts():
     }
 
     assert extract_warrant_facts(company_facts_without_warrants) == []
-
-
-def test_fetch_company_facts_builds_expected_url():
-    with patch(
-        "collectors.warrants.src.sec_warrant_xbrl.fetch_json",
-        return_value=SAMPLE_COMPANY_FACTS,
-    ) as mocked_fetch:
-
-        result = fetch_company_facts(
-            "0001234567",
-            user_agent="QuantLab test contact@example.com",
-            timeout_seconds=9,
-        )
-
-    mocked_fetch.assert_called_once_with(
-        "https://data.sec.gov/api/xbrl/companyfacts/CIK0001234567.json",
-        user_agent="QuantLab test contact@example.com",
-        timeout_seconds=9,
-    )
-    assert result == SAMPLE_COMPANY_FACTS

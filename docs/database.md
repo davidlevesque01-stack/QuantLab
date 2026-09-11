@@ -139,6 +139,7 @@ Fichiers actuels :
 006_nasdaq_persistence_v1_2.sql
 007_nasdaq_resumption_reason_v1_3.sql
 008_create_sec_warrant_xbrl_schema.sql
+009_create_sec_shares_outstanding_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -274,6 +275,20 @@ Elle :
   existante à migrer).
 
 La migration 008 a été appliquée avec succès en DEV le 2026-09-11.
+
+### 5.11 Migration 009
+
+`009_create_sec_shares_outstanding_schema.sql` crée :
+
+```text
+raw.sec_shares_outstanding_fact
+```
+
+Même structure que `raw.sec_warrant_xbrl_fact` (§5.10), mais pour le fait
+`dei:EntityCommonStockSharesOutstanding` (SEC-01 / SEC-02) — présent sur la
+page de couverture de tout déposant 10-K/10-Q, donc une couverture
+attendue bien plus large que les warrants. Réutilise le même verrou
+QuantLab, avec un `objid` distinct : `(716203, 4)`.
 
 ---
 
@@ -758,7 +773,8 @@ Il est acquis avant les lectures/écritures Nasdaq et libéré automatiquement a
 La migration 006 utilise le même verrou.
 
 Le composant warrants réserve `(716203, 3)` (`classid` partagé, `objid`
-distinct) pour la capture RAW des faits XBRL SEC (voir §5.10). `objid = 2`
+distinct) pour la capture RAW des faits XBRL de warrants (voir §5.10), et
+`(716203, 4)` pour la capture RAW des shares outstanding (§5.11). `objid = 2`
 est réservé à la capture RAW DilutionTracker (à venir), afin de conserver
 un registre cohérent des verrous entre les sources.
 
