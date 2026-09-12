@@ -71,13 +71,17 @@ DilutionTracker pull:
   these warrants — sums don't fully reconcile to 258,374, worth a closer read of the source
   filing); $4.2756 exercise / 16,214 shares / 5-year term.
 
-**Encoding bug found alongside this** (filed separately, not a SEC-15 defect — affects SEC-10's
-regex path too): several `raw_snippet` values on these older filings contain mojibake
-("CompanyÆs" instead of "Company's", "ôWarrantsö" instead of curly-quoted "Warrants") — the
-numeric facts themselves are still correct and verified against the source filings, only the
-quoted text's typographic quotes/apostrophes are corrupted. Root cause: `fetch_document_text`
-(`sec_8k_warrant_text_extraction.py`) always decodes as UTF-8; these older EDGAR filings are
-likely served in a different encoding (cp1252 suspected).
+**Apparent encoding issue investigated and ruled out** (2026-09-12, issue #89, closed as not a
+bug): a psql terminal session displayed some `raw_snippet` values with garbled characters
+("CompanyÆs" instead of "Company's", "ôWarrantsö" instead of curly-quoted "Warrants"). Traced
+end-to-end: the raw SEC bytes are valid UTF-8 using ASCII-safe HTML numeric entities
+(`&#8217;`, `&#8220;`, `&#8221;`); `fetch_document_text`/`html.unescape()` correctly resolve
+these to their proper Unicode codepoints (confirmed directly via `ord()` — U+2019 for the
+apostrophe in "Company's", not a replacement character); and a direct query of the stored
+`raw_snippet` value from PostgreSQL (bypassing the `psql` terminal client entirely) confirms the
+correct U+2019 codepoint is genuinely what's stored. The garbling was a terminal/console display
+artifact (in both an ad hoc Bash-tool print and the user's `psql`/PowerShell session), not a
+data or extraction bug — no code change was needed.
 
 ### Warrants
 
