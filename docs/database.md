@@ -148,6 +148,7 @@ Fichiers actuels :
 015_create_sec_reverse_split_event_schema.sql
 016_add_match_reason_to_sec_8k_warrant_exhibit.sql
 017_add_extraction_method_to_sec_8k_warrant_text_extraction.sql
+018_create_market_data_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -483,6 +484,40 @@ hallucination (un extrait cité qui n'existe pas mot pour mot dans le
 document source est rejeté, jamais persisté). Réutilise la même table
 que SEC-10 (forme de résultat inchangée) ; `extraction_method`
 distingue laquelle des deux méthodes a produit une ligne donnée.
+
+### 5.20 Migration 018
+
+`018_create_market_data_schema.sql` crée :
+
+```text
+raw.market_bar_1m
+core.market_bar_1m
+```
+
+BT-01 : première brique du module de backtesting (voir
+`docs/backtesting/BACKTESTING_COMPONENT.md`) — persistance des chandelles
+OHLCV 1 minute derrière l'interface `QuantLabAdapter`, alimentée pour
+l'instant par un adapter stub/CSV sur données fixture (aucun fournisseur
+réel branché avant BT-11). Seule la granularité 1 minute est persistée ;
+les granularités supérieures (2m/5m/15m/.../daily) sont calculées à la
+volée par l'Aggregation Engine (BT-02), jamais fournies par un fournisseur.
+
+`bar_start` est un `TIMESTAMP` naïf représentant l'heure locale Nasdaq
+(`America/New_York`), selon la convention formalisée en BT-00 (§15).
+
+`raw.market_bar_1m` est une capture RAW immuable : une même chandelle
+(`ticker`, `market`, `bar_start`) peut porter une ligne par source
+distincte, jamais modifiée après insertion. `core.market_bar_1m` porte la
+chandelle canonique par `(ticker, market, bar_start)` — pour la tranche
+verticale BT-01 (un seul adapter actif), CORE est un simple passe-plat de
+RAW ; la réconciliation multi-source reste à faire lors de BT-11.
+
+Contraintes `CHECK` sur OHLC (`high >= open/close/low`, `low <=
+open/close`) et `volume >= 0` — la même invariance que BT-12 revalidera à
+l'ingestion, mais portée ici comme dernier filet de sécurité (principe
+« les contraintes PostgreSQL restent la protection finale »).
+
+Réutilise le même verrou QuantLab, avec un `objid` distinct : `(716203, 10)`.
 
 Chemin LLM strictement opt-in dans `run_sec_collection.py`
 (`--use-llm-extraction`) : chaque appel a un coût API réel, jamais
@@ -989,6 +1024,8 @@ distinct) pour la capture RAW des faits XBRL de warrants (voir §5.10), et
 `(716203, 7)` pour l'extraction texte des modalités de warrants (§5.14), et
 `(716203, 8)` pour la trace d'audit de résolution ticker→CIK (§5.16), et
 `(716203, 9)` pour les événements de reverse split (§5.17).
+Le composant market_data (backtesting) réserve `(716203, 10)` pour la
+capture RAW+CORE des chandelles `market_bar_1m` (§5.20).
 `objid = 2` est réservé à la capture RAW DilutionTracker (à venir), afin
 de conserver un registre cohérent des verrous entre les sources.
 
