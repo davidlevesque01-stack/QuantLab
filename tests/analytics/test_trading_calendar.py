@@ -1,11 +1,20 @@
-﻿from datetime import date, time
+﻿from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from shared.calendar.trading_calendar import (
+    AFTER_HOURS_CLOSE,
     EARLY_CLOSE,
+    NASDAQ_TZ,
     NORMAL_CLOSE,
+    PRE_MARKET_OPEN,
+    REGULAR_OPEN,
+    get_session_bounds,
     get_session_close,
     get_trading_days,
     is_trading_day,
+    localize,
 )
 
 
@@ -70,3 +79,39 @@ def test_multiday_episode_excludes_holiday():
         date(2020, 7, 2),
         date(2020, 7, 6),
     )
+
+
+def test_session_bounds_normal_day():
+    bounds = get_session_bounds(date(2026, 7, 6))
+
+    assert bounds.pre_market_open == PRE_MARKET_OPEN
+    assert bounds.regular_open == REGULAR_OPEN
+    assert bounds.regular_close == NORMAL_CLOSE
+    assert bounds.after_hours_close == AFTER_HOURS_CLOSE
+
+
+def test_session_bounds_early_close_day():
+    bounds = get_session_bounds(date(2026, 12, 24))
+
+    assert bounds.regular_close == EARLY_CLOSE
+    assert bounds.after_hours_close == AFTER_HOURS_CLOSE
+
+
+def test_session_bounds_non_trading_day_is_none():
+    assert get_session_bounds(date(2026, 7, 4)) is None
+
+
+def test_localize_attaches_nasdaq_timezone():
+    naive = datetime(2026, 8, 14, 10, 17, 0)
+
+    localized = localize(naive)
+
+    assert localized.tzinfo == NASDAQ_TZ
+    assert localized.replace(tzinfo=None) == naive
+
+
+def test_localize_rejects_already_aware_datetime():
+    aware = datetime(2026, 8, 14, 10, 17, 0, tzinfo=ZoneInfo("UTC"))
+
+    with pytest.raises(ValueError):
+        localize(aware)

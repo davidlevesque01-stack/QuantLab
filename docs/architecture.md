@@ -858,14 +858,22 @@ Validated capabilities include:
 
 Primary remaining architectural work includes:
 
-- official market-calendar modeling;
 - PostgreSQL analytics;
 - centralized orchestration;
 - backup / restore validation;
 - TEST / PROD preparation;
 - secrets-management strategy;
-- formal Nasdaq timezone semantics;
 - future hardening of nullable schema fields where justified.
+
+Nasdaq timezone semantics are now formalized: all naive QuantLab timestamps (Nasdaq
+HALT episodes, SEC filing dates, and `market_bar_1m` once BT-01 lands) represent
+Nasdaq's local wall-clock time (`America/New_York`), not UTC. `shared/calendar/trading_calendar.py`
+carries this as `NASDAQ_TZ`, exposes `get_session_bounds()` for pre-market
+(04:00) / regular / after-hours (20:00) session boundaries, and a `localize()`
+helper to attach the timezone to a naive value when a comparison against a
+tz-aware source (e.g. a future intraday data provider) requires it. No existing
+PostgreSQL column type changes as a result of this — see `docs/database.md`
+Section 15.
 
 ---
 
