@@ -18,6 +18,35 @@ so far.
 
 ## TNON (Tenon Medical, Inc. — CIK 0001560293)
 
+### SEC-12/SEC-13 real backfill validation (2026-09-11)
+
+Real (non-rollback) run of `run_sec_collection.py --tickers TNON` after implementing SEC-12
+(full 8-K history pagination, `fetch_all_8k_filings`) and SEC-13 (EX-4.x exhibit-type fallback,
+`match_reason` column). Result: `warrant_exhibits: inserted=5, skipped=20` and
+`reverse_splits: inserted=1, skipped=1` — both new discoveries confirmed genuine:
+
+- **SEC-13 confirmed**: two 2022-04-29 exhibits (`EXHIBIT 4.1`/`EXHIBIT 4.2`, `match_reason =
+  exhibit_type`) carry no descriptive title at all — invisible to the old description-only
+  match, caught only via the EX-4.x structural fallback.
+- **SEC-12 confirmed**: a 2023-11-28 "FORM OF WARRANT" exhibit, older than the old 40-most-recent-
+  filing cutoff would ever reach, was discovered via full-history pagination.
+- **Known false-positive trade-off, not a bug**: two 2026 exhibits ("FORM OF SENIOR CONVERTIBLE
+  PROMISSORY NOTES") matched only on `exhibit_type` — EX-4.x also covers non-warrant "instruments
+  defining the rights of security holders" (convertible notes included), exactly the
+  necessary-but-not-sufficient limitation called out in SEC-13's scope.
+- **Pre-migration-016 rows show `match_reason = NULL`**: the 20 exhibits already in
+  `raw.sec_8k_warrant_exhibit` from before migration 016 was applied were never retroactively
+  backfilled with a `match_reason` (RAW rows are immutable/append-only, and `ON CONFLICT DO
+  NOTHING` skips re-insertion of already-known rows) — expected, not a defect.
+- **New second reverse split found** (`raw.sec_reverse_split_event`): a **1-for-10** split
+  filed 2023-11-07, in addition to the already-known **1-for-35** split filed 2026-08-10
+  (SEC-11). This means the cumulative adjustment factor for anything issued **before
+  2023-11-07** is **10 × 35 = 350x**, not 35x as previously assumed — directly relevant to
+  WRT-06 (retroactive ratio application to `raw.sec_8k_warrant_text_extraction`, still
+  deferred). `effective_date` is NULL for this older split: `EFFECTIVE_DATE_PATTERN` in
+  `sec_reverse_split_extraction.py` didn't match this filing's phrasing — a known, narrow
+  extraction gap (ratio itself was still extracted correctly), not yet fixed.
+
 ### Warrants
 
 | Series | Status | Exercise Price | Total Issued | Expiration |
@@ -86,6 +115,35 @@ confirmed in SEC-11 (original issuance quantities in `raw.sec_8k_warrant_text_ex
 ---
 
 ## GPUS (CIK 0000896493)
+
+### SEC-12/SEC-13 real backfill validation (2026-09-11)
+
+Real (non-rollback) runs of `run_sec_collection.py --tickers GPUS`, split across two attempts
+(the first ran silently and was interrupted mid-`warrant_text_extraction` — see progress-logging
+addition above — but had already completed and persisted the `warrants`/`shares_outstanding`/
+`warrant_exhibits` steps by then; the second, later run picked up where it left off).
+
+`fetch_all_8k_filings` retrieves GPUS's full 627 8-K filings back to **1998-02-10** (vs. 40
+filings back to 2025-10-17 under the old fixed count) — 241 of those match items 1.01/3.02.
+
+Confirmed new discoveries, all previously invisible under the old 40-filing cap and/or
+description-only exhibit matching:
+
+- **SEC-13 (EX-4.x fallback) confirmed**, 5 exhibits, all bare `EXHIBIT 4.x` titles with no
+  "warrant" text, `match_reason = exhibit_type`:
+  - 2023-11-07 (accession 0001214659-23-014653, EX-4.1) — matches the ground truth's "October
+    2023 Warrants" / "November 2023 Warrants" era.
+  - 2023-10-16 (accession 0001214659-23-013465, EX-4.1 and EX-4.2).
+  - 2021-12-22 (accession 0001214659-21-013530, EX-4.1) and 2021-12-16 (accession
+    0001214659-21-013284, EX-4.1) — matches "December 2021 Note Class A/B Warrants".
+- **SEC-12 (full history) confirmed**, two facts from **2019**, far beyond the old 40-filing
+  window:
+  - `raw.sec_8k_warrant_text_extraction`: a pre-funded warrant, 12,700,000 shares, filed
+    2019-04-01 (accession 0001214659-19-002393).
+  - `raw.sec_reverse_split_event`: a **1-for-20** reverse split filed 2019-03-14 — a THIRD
+    known split (alongside TNON's two), reinforcing that `effective_date` extraction gaps are a
+    recurring pattern on older filings (NULL here too, same as TNON's 2023-11-07 split), not a
+    one-off quirk of a single document's phrasing.
 
 ### Warrants
 

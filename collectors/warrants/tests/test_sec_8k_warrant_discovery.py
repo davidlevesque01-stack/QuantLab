@@ -2,7 +2,11 @@ from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
 
 from collectors.warrants.src.sec_8k_warrant_discovery import (
+    DEFAULT_PAGE_SIZE,
+    build_8k_filings_feed_url,
     discover_warrant_exhibits_for_cik,
+    fetch_8k_filings,
+    fetch_all_8k_filings,
     fetch_url,
     filter_candidate_filings,
     filter_warrant_exhibits,
@@ -102,11 +106,49 @@ def test_filter_warrant_exhibits_keeps_only_warrant_descriptions():
 
     assert len(warrant_exhibits) == 1
     assert warrant_exhibits[0]["description"] == "FORM OF PRE-FUNDED WARRANT"
+    assert warrant_exhibits[0]["match_reason"] == "description+exhibit_type"
+
+
+def test_filter_warrant_exhibits_falls_back_to_exhibit_type_code():
+    """
+    SEC-13 regression: a filer (e.g. GPUS) that never writes a
+    descriptive exhibit title ("EXHIBIT 4.1" instead of "FORM OF
+    PRE-FUNDED WARRANT") must still be caught, via the EX-4.x exhibit
+    type code alone (Item 601(b)(4) of Regulation S-K).
+    """
+
+    documents = [
+        {"seq": 1, "exhibit_type": "8-K", "description": "CURRENT REPORT", "url": "a"},
+        {"seq": 2, "exhibit_type": "EX-1.1", "description": "AGENCY AGREEMENT", "url": "b"},
+        {"seq": 3, "exhibit_type": "EX-4.1", "description": "EXHIBIT 4.1", "url": "c"},
+    ]
+
+    warrant_exhibits = filter_warrant_exhibits(documents)
+
+    assert len(warrant_exhibits) == 1
+    assert warrant_exhibits[0]["description"] == "EXHIBIT 4.1"
+    assert warrant_exhibits[0]["match_reason"] == "exhibit_type"
+
+
+def test_filter_warrant_exhibits_matches_description_without_ex4_type():
+    """
+    A description-only match (e.g. a warrant referenced under a
+    non-EX-4 exhibit type) is still kept, tagged with its own reason.
+    """
+
+    documents = [
+        {"seq": 4, "exhibit_type": "EX-10.1", "description": "WARRANT AGREEMENT", "url": "d"},
+    ]
+
+    warrant_exhibits = filter_warrant_exhibits(documents)
+
+    assert len(warrant_exhibits) == 1
+    assert warrant_exhibits[0]["match_reason"] == "description"
 
 
 def test_discover_warrant_exhibits_for_cik_combines_discovery_steps():
     with patch(
-        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_8k_filings",
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_all_8k_filings",
         return_value=parse_filings_atom(SAMPLE_ATOM),
     ), patch(
         "collectors.warrants.src.sec_8k_warrant_discovery.fetch_url",
@@ -122,9 +164,91 @@ def test_discover_warrant_exhibits_for_cik_combines_discovery_steps():
     assert results[0]["accession_number"] == "0001213900-26-095686"
     assert results[0]["description"] == "FORM OF PRE-FUNDED WARRANT"
     assert results[0]["exhibit_seq"] == 3
+    assert results[0]["match_reason"] == "description+exhibit_type"
     # Only the candidate filing's index should have been fetched, not the
     # non-candidate one.
     mocked_fetch_url.assert_called_once()
+
+
+def test_build_8k_filings_feed_url_includes_start_param():
+    url = build_8k_filings_feed_url("0001560293", count=100, start=200)
+
+    assert "count=100" in url
+    assert "start=200" in url
+
+
+def test_fetch_all_8k_filings_stops_on_short_page():
+    """
+    A single page shorter than page_size means we've reached the end of
+    the filer's history — no further page should be requested.
+    """
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_8k_filings",
+        return_value=parse_filings_atom(SAMPLE_ATOM),
+    ) as mocked_fetch:
+
+        filings = fetch_all_8k_filings(
+            "0001560293",
+            user_agent="QuantLab test contact@example.com",
+            page_size=DEFAULT_PAGE_SIZE,
+        )
+
+    assert len(filings) == 2
+    mocked_fetch.assert_called_once_with(
+        "0001560293",
+        user_agent="QuantLab test contact@example.com",
+        timeout_seconds=30,
+        count=DEFAULT_PAGE_SIZE,
+        start=0,
+    )
+
+
+def test_fetch_all_8k_filings_paginates_across_full_pages():
+    """
+    SEC-12: a high-frequency filer (e.g. GPUS) whose full history spans
+    more than one page must have every page fetched, walking `start`
+    forward by `page_size` each time, until a short (or empty) page ends
+    the walk.
+    """
+
+    full_page = parse_filings_atom(SAMPLE_ATOM) * 1  # 2 entries
+    # Simulate page_size=2: first two pages full, third page short (0).
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_8k_filings",
+        side_effect=[full_page, full_page, []],
+    ) as mocked_fetch:
+
+        filings = fetch_all_8k_filings(
+            "0001560293",
+            user_agent="QuantLab test contact@example.com",
+            page_size=2,
+        )
+
+    assert len(filings) == 4
+    assert mocked_fetch.call_count == 3
+    assert mocked_fetch.call_args_list[0].kwargs["start"] == 0
+    assert mocked_fetch.call_args_list[1].kwargs["start"] == 2
+    assert mocked_fetch.call_args_list[2].kwargs["start"] == 4
+
+
+def test_fetch_all_8k_filings_respects_max_pages_guard():
+    full_page = parse_filings_atom(SAMPLE_ATOM)  # 2 entries, == page_size
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_8k_filings",
+        return_value=full_page,
+    ) as mocked_fetch:
+
+        filings = fetch_all_8k_filings(
+            "0001560293",
+            user_agent="QuantLab test contact@example.com",
+            page_size=2,
+            max_pages=3,
+        )
+
+    assert mocked_fetch.call_count == 3
+    assert len(filings) == 6
 
 
 def test_find_main_document_skips_numbered_exhibits():

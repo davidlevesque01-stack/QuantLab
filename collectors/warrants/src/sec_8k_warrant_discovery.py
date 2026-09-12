@@ -74,26 +74,84 @@ def fetch_url(
         time.sleep(retry_delay_seconds * (attempt + 1))
 
 
-def build_8k_filings_feed_url(cik, count=40):
+DEFAULT_PAGE_SIZE = 100
+
+DEFAULT_MAX_PAGES = 50
+
+
+def build_8k_filings_feed_url(cik, count=40, start=0):
     return (
         "https://www.sec.gov/cgi-bin/browse-edgar"
         f"?action=getcompany&CIK={cik}&type=8-K"
-        f"&dateb=&owner=include&count={count}&output=atom"
+        f"&dateb=&owner=include&count={count}&start={start}&output=atom"
     )
 
 
-def fetch_8k_filings(cik, *, user_agent, timeout_seconds=30, count=40):
+def fetch_8k_filings(cik, *, user_agent, timeout_seconds=30, count=40, start=0):
     """
-    Récupère et parse le flux Atom des dépôts 8-K (et 8-K/A) pour un CIK.
+    Récupère et parse UNE page du flux Atom des dépôts 8-K (et 8-K/A)
+    pour un CIK (les `count` dépôts les plus récents en partant de
+    `start`). Pour l'historique complet, voir `fetch_all_8k_filings`
+    (SEC-12).
     """
 
     atom_bytes = fetch_url(
-        build_8k_filings_feed_url(cik, count=count),
+        build_8k_filings_feed_url(cik, count=count, start=start),
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,
     )
 
     return parse_filings_atom(atom_bytes)
+
+
+def fetch_all_8k_filings(
+    cik,
+    *,
+    user_agent,
+    timeout_seconds=30,
+    page_size=DEFAULT_PAGE_SIZE,
+    max_pages=DEFAULT_MAX_PAGES,
+):
+    """
+    Pagine le flux Atom browse-edgar (paramètre `start`) pour récupérer
+    l'historique COMPLET des 8-K d'un CIK, plutôt que de se limiter aux
+    `count` plus récents (SEC-11/SEC-12 : sur GPUS, un filer à haute
+    fréquence, `count=40` ne remonte qu'à ~11 mois — les warrants de
+    novembre 2023, octobre 2023, décembre 2021 et janvier 2025 visibles
+    sur DilutionTracker ne sont alors jamais même récupérés, pas
+    seulement mal parsés).
+
+    Défaut choisi : historique complet depuis le premier 8-K disponible
+    (pas de fenêtre de temps arbitraire), en s'arrêtant dès qu'une page
+    renvoie moins de `page_size` dépôts (fin de l'historique). `max_pages`
+    est un garde-fou contre un filer pathologiquement prolifique plutôt
+    qu'une limite attendue en usage normal.
+    """
+
+    all_filings = []
+    start = 0
+
+    for _ in range(max_pages):
+
+        page = fetch_8k_filings(
+            cik,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+            count=page_size,
+            start=start,
+        )
+
+        if not page:
+            break
+
+        all_filings.extend(page)
+
+        if len(page) < page_size:
+            break
+
+        start += page_size
+
+    return all_filings
 
 
 def parse_filings_atom(atom_bytes):
@@ -266,14 +324,55 @@ def parse_filing_index_documents(index_html_bytes):
     return documents
 
 
-def filter_warrant_exhibits(documents):
-    """Garde les documents dont la description mentionne "warrant"."""
+EXHIBIT_TYPE_WARRANT_PREFIX = "EX-4"
 
-    return [
-        document
-        for document in documents
-        if WARRANT_DESCRIPTION_PATTERN.search(document.get("description") or "")
-    ]
+
+def filter_warrant_exhibits(documents):
+    """
+    Garde les documents probablement liés à un warrant, sur deux
+    signaux indépendants (SEC-13) :
+
+    - description textuelle contenant "warrant" (signal existant,
+      dépend de la formulation du déposant/cabinet juridique) ;
+    - code d'exhibit EX-4.x (Item 601(b)(4) de la Regulation S-K,
+      « Instruments defining the rights of security holders ») — signal
+      structurel, indépendant du texte. Nécessaire mais pas suffisant
+      (couvre aussi des indentures/autres instruments non-warrant),
+      donc gardé comme signal de repli plutôt que remplaçant : certains
+      déposants (ex. GPUS) n'écrivent jamais "WARRANT" en description
+      ("EXHIBIT 4.1" au lieu de "FORM OF PRE-FUNDED WARRANT") et sont
+      autrement invisibles à SEC-09.
+
+    Chaque résultat porte un `match_reason` ("description",
+    "exhibit_type", ou "description+exhibit_type") pour audit humain —
+    un match par code d'exhibit seul mérite plus de scepticisme qu'un
+    match textuel explicite.
+    """
+
+    results = []
+
+    for document in documents:
+
+        description_match = bool(
+            WARRANT_DESCRIPTION_PATTERN.search(document.get("description") or "")
+        )
+        exhibit_type_match = (document.get("exhibit_type") or "").upper().startswith(
+            EXHIBIT_TYPE_WARRANT_PREFIX
+        )
+
+        if not description_match and not exhibit_type_match:
+            continue
+
+        if description_match and exhibit_type_match:
+            match_reason = "description+exhibit_type"
+        elif description_match:
+            match_reason = "description"
+        else:
+            match_reason = "exhibit_type"
+
+        results.append({**document, "match_reason": match_reason})
+
+    return results
 
 
 def find_main_document(documents):
@@ -303,16 +402,18 @@ def find_main_document(documents):
 
 def discover_warrant_exhibits_for_cik(cik, *, user_agent, timeout_seconds=30):
     """
-    Pour un CIK : liste les 8-K, filtre ceux dont les items évoquent un
-    placement (1.01/3.02), ouvre leur index et garde les exhibits dont
-    la description mentionne "warrant".
+    Pour un CIK : liste l'historique COMPLET des 8-K (SEC-12, plus
+    limité aux 40 plus récents), filtre ceux dont les items évoquent un
+    placement (1.01/3.02), ouvre leur index et garde les exhibits
+    probablement liés à un warrant (description textuelle et/ou code
+    d'exhibit EX-4.x, SEC-13).
 
     Retourne une liste de dicts prêts à persister (voir
     warrants_postgresql.write_sec_8k_warrant_exhibits), un par exhibit
     candidat trouvé.
     """
 
-    filings = fetch_8k_filings(
+    filings = fetch_all_8k_filings(
         cik,
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,
@@ -351,6 +452,7 @@ def discover_warrant_exhibits_for_cik(cik, *, user_agent, timeout_seconds=30):
                     "exhibit_type": exhibit["exhibit_type"],
                     "description": exhibit["description"],
                     "document_url": exhibit["url"],
+                    "match_reason": exhibit["match_reason"],
                 }
             )
 

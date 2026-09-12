@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import datetime, timezone
 
 from collectors.warrants.src.sec_8k_warrant_exhibit_collector import (
     collect_ticker_8k_warrant_exhibits,
@@ -44,6 +45,22 @@ from collectors.warrants.src.sec_warrant_collector import collect_ticker_warrant
 
 
 USER_AGENT_ENV = "QUANTLAB_SEC_USER_AGENT"
+
+
+def log_progress(message):
+    """
+    Affiche un message de progression horodaté sur stdout, avec flush
+    immédiat (`print(..., flush=True)`).
+
+    Sans ça, cette CLI reste silencieuse pendant toute la durée d'un
+    ticker (potentiellement plusieurs minutes depuis SEC-12, qui pagine
+    l'historique COMPLET des 8-K sur 3 pipelines de découverte
+    distincts) — aucun moyen de distinguer "en cours" de "bloqué" sans
+    au moins un signal de vie régulier.
+    """
+
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
 
 
 def resolve_user_agent(cli_value, env_value):
@@ -85,40 +102,59 @@ def run_collection(
 
     for ticker in tickers:
 
+        log_progress(f"{ticker}: starting (warrant XBRL facts, SEC-06)...")
         warrant_result = collect_ticker_warrants(
             ticker,
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
+        log_progress(f"{ticker}: warrants -> {warrant_result}")
 
+        log_progress(f"{ticker}: shares outstanding (SEC-01/02)...")
         shares_result = collect_ticker_shares_outstanding(
             ticker,
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
+        log_progress(f"{ticker}: shares_outstanding -> {shares_result}")
 
+        log_progress(
+            f"{ticker}: 8-K warrant exhibits (SEC-09/12/13, full 8-K "
+            "history — can take a while)..."
+        )
         exhibits_result = collect_ticker_8k_warrant_exhibits(
             ticker,
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
+        log_progress(f"{ticker}: warrant_exhibits -> {exhibits_result}")
 
+        log_progress(
+            f"{ticker}: 8-K warrant text extraction (SEC-10/12, full "
+            "8-K history — can take a while)..."
+        )
         text_extraction_result = collect_ticker_8k_warrant_text_extraction(
             ticker,
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
+        log_progress(f"{ticker}: warrant_text_extraction -> {text_extraction_result}")
 
+        log_progress(
+            f"{ticker}: reverse stock split events (SEC-11/12, full "
+            "8-K history — can take a while)..."
+        )
         reverse_split_result = collect_ticker_reverse_splits(
             ticker,
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
+        log_progress(f"{ticker}: reverse_splits -> {reverse_split_result}")
 
         results.append(
             {
