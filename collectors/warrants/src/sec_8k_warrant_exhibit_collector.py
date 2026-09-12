@@ -24,11 +24,19 @@ def collect_ticker_8k_warrant_exhibits(
     *,
     user_agent,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
 ):
     """
     Découvre et persiste les exhibits de 8-K probablement liés à un
     warrant pour un ticker. Retourne un statut explicite si le ticker
     n'a pas de CIK connu ou si aucun exhibit candidat n'a été trouvé.
+
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik` —
+    permet à l'appelant (`run_sec_collection.py`) de partager
+    l'historique 8-K déjà récupéré et les requêtes déjà en cache entre
+    plusieurs pipelines de découverte pour le même ticker.
     """
 
     cik = resolve_cik(ticker, ticker_cik_map)
@@ -46,6 +54,8 @@ def collect_ticker_8k_warrant_exhibits(
         cik,
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,
+        filings=filings,
+        fetch_cache=fetch_cache,
     )
 
     if not exhibits:

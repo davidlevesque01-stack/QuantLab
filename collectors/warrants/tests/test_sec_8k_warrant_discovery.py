@@ -170,6 +170,62 @@ def test_discover_warrant_exhibits_for_cik_combines_discovery_steps():
     mocked_fetch_url.assert_called_once()
 
 
+def test_discover_warrant_exhibits_for_cik_uses_pre_fetched_filings():
+    """
+    SEC-17: when `filings` is provided by the caller (already fetched
+    once, shared across pipelines), fetch_all_8k_filings must NOT be
+    called again.
+    """
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_all_8k_filings",
+    ) as mocked_fetch_all, patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_url",
+        return_value=SAMPLE_INDEX_HTML,
+    ):
+
+        results = discover_warrant_exhibits_for_cik(
+            "0001560293",
+            user_agent="QuantLab test contact@example.com",
+            filings=parse_filings_atom(SAMPLE_ATOM),
+        )
+
+    mocked_fetch_all.assert_not_called()
+    assert len(results) == 1
+
+
+def test_discover_warrant_exhibits_for_cik_reuses_shared_fetch_cache():
+    """
+    SEC-17: with a `fetch_cache` shared across two calls for the same
+    filing index, the index is only fetched over the network once.
+    """
+
+    from collectors.warrants.src.sec_fetch_cache import SharedFetchCache
+
+    cache = SharedFetchCache()
+    filings = parse_filings_atom(SAMPLE_ATOM)
+
+    with patch(
+        "collectors.warrants.src.sec_8k_warrant_discovery.fetch_url",
+        return_value=SAMPLE_INDEX_HTML,
+    ) as mocked_fetch_url:
+
+        discover_warrant_exhibits_for_cik(
+            "0001560293",
+            user_agent="QuantLab test contact@example.com",
+            filings=filings,
+            fetch_cache=cache,
+        )
+        discover_warrant_exhibits_for_cik(
+            "0001560293",
+            user_agent="QuantLab test contact@example.com",
+            filings=filings,
+            fetch_cache=cache,
+        )
+
+    mocked_fetch_url.assert_called_once()
+
+
 def test_build_8k_filings_feed_url_includes_start_param():
     url = build_8k_filings_feed_url("0001560293", count=100, start=200)
 

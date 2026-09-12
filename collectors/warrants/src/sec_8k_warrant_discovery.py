@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -23,6 +24,8 @@ from xml.etree import ElementTree
 
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+DEFAULT_MAX_WORKERS = 6
 
 WARRANT_ITEM_CODES = ("1.01", "3.02")
 
@@ -400,7 +403,58 @@ def find_main_document(documents):
     return min(non_exhibit_docs, key=lambda document: document["seq"])
 
 
-def discover_warrant_exhibits_for_cik(cik, *, user_agent, timeout_seconds=30):
+def _exhibits_for_candidate(filing, *, user_agent, timeout_seconds, fetch_cache):
+    """
+    Traite UN filing candidat : ouvre son index et retourne la liste des
+    exhibits probablement liés à un warrant qu'il contient (peut être
+    vide). Isolé de `discover_warrant_exhibits_for_cik` pour pouvoir
+    être exécuté en parallèle (SEC-17) sur plusieurs filings à la fois —
+    des requêtes réseau indépendantes, pas du calcul.
+    """
+
+    index_url = filing["filing_index_url"]
+
+    if index_url is None:
+        return []
+
+    def _fetch_and_parse(url):
+        return parse_filing_index_documents(
+            fetch_url(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+        )
+
+    if fetch_cache is not None:
+        documents = fetch_cache.get_index_documents(index_url, _fetch_and_parse)
+    else:
+        documents = _fetch_and_parse(index_url)
+
+    warrant_exhibits = filter_warrant_exhibits(documents)
+
+    return [
+        {
+            "accession_number": filing["accession_number"],
+            "filing_date": filing["filing_date"],
+            "form_type": filing["form_type"],
+            "item_codes": filing["item_codes"],
+            "filing_index_url": index_url,
+            "exhibit_seq": exhibit["seq"],
+            "exhibit_type": exhibit["exhibit_type"],
+            "description": exhibit["description"],
+            "document_url": exhibit["url"],
+            "match_reason": exhibit["match_reason"],
+        }
+        for exhibit in warrant_exhibits
+    ]
+
+
+def discover_warrant_exhibits_for_cik(
+    cik,
+    *,
+    user_agent,
+    timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
+    max_workers=DEFAULT_MAX_WORKERS,
+):
     """
     Pour un CIK : liste l'historique COMPLET des 8-K (SEC-12, plus
     limité aux 40 plus récents), filtre ceux dont les items évoquent un
@@ -408,52 +462,43 @@ def discover_warrant_exhibits_for_cik(cik, *, user_agent, timeout_seconds=30):
     probablement liés à un warrant (description textuelle et/ou code
     d'exhibit EX-4.x, SEC-13).
 
+    `filings` (SEC-17) : liste de filings déjà récupérée par l'appelant
+    (évite de répéter la pagination complète de l'historique quand
+    plusieurs pipelines de découverte traitent le même CIK) — si None,
+    récupérée ici comme avant.
+
+    `fetch_cache` (SEC-17) : `SharedFetchCache` optionnel, partagé entre
+    plusieurs pipelines qui traitent les mêmes filings candidats
+    (exhibits, extraction texte regex/LLM — tous filtrent sur 1.01/3.02)
+    pour éviter de refaire la même requête d'index plusieurs fois.
+
+    Les filings candidats sont traités en parallèle (`max_workers`
+    threads, SEC-17) — ce sont des requêtes réseau indépendantes,
+    l'attente domine largement le calcul.
+
     Retourne une liste de dicts prêts à persister (voir
     warrants_postgresql.write_sec_8k_warrant_exhibits), un par exhibit
     candidat trouvé.
     """
 
-    filings = fetch_all_8k_filings(
-        cik,
-        user_agent=user_agent,
-        timeout_seconds=timeout_seconds,
-    )
-
-    candidates = filter_candidate_filings(filings)
-
-    results = []
-
-    for filing in candidates:
-
-        index_url = filing["filing_index_url"]
-
-        if index_url is None:
-            continue
-
-        index_html = fetch_url(
-            index_url,
+    if filings is None:
+        filings = fetch_all_8k_filings(
+            cik,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
 
-        documents = parse_filing_index_documents(index_html)
-        warrant_exhibits = filter_warrant_exhibits(documents)
+    candidates = filter_candidate_filings(filings)
 
-        for exhibit in warrant_exhibits:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        per_filing_results = executor.map(
+            lambda filing: _exhibits_for_candidate(
+                filing,
+                user_agent=user_agent,
+                timeout_seconds=timeout_seconds,
+                fetch_cache=fetch_cache,
+            ),
+            candidates,
+        )
 
-            results.append(
-                {
-                    "accession_number": filing["accession_number"],
-                    "filing_date": filing["filing_date"],
-                    "form_type": filing["form_type"],
-                    "item_codes": filing["item_codes"],
-                    "filing_index_url": index_url,
-                    "exhibit_seq": exhibit["seq"],
-                    "exhibit_type": exhibit["exhibit_type"],
-                    "description": exhibit["description"],
-                    "document_url": exhibit["url"],
-                    "match_reason": exhibit["match_reason"],
-                }
-            )
-
-    return results
+        return [exhibit for results in per_filing_results for exhibit in results]

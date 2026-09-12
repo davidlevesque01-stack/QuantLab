@@ -24,11 +24,16 @@ def collect_ticker_reverse_splits(
     *,
     user_agent,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
 ):
     """
     Découvre et persiste les événements de reverse split pour un
     ticker. Retourne un statut explicite si le ticker n'a pas de CIK
     connu ou si aucun split n'a été trouvé.
+
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik`.
     """
 
     cik = resolve_cik(ticker, ticker_cik_map)
@@ -46,6 +51,8 @@ def collect_ticker_reverse_splits(
         cik,
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,
+        filings=filings,
+        fetch_cache=fetch_cache,
     )
 
     if not events:

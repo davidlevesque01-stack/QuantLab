@@ -24,11 +24,16 @@ def collect_ticker_8k_warrant_text_extraction(
     *,
     user_agent,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
 ):
     """
     Extrait et persiste les modalités de warrants trouvées dans le texte
     des 8-K pour un ticker. Retourne un statut explicite si le ticker
     n'a pas de CIK connu ou si aucune observation n'a été extraite.
+
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik`.
     """
 
     cik = resolve_cik(ticker, ticker_cik_map)
@@ -46,6 +51,8 @@ def collect_ticker_8k_warrant_text_extraction(
         cik,
         user_agent=user_agent,
         timeout_seconds=timeout_seconds,
+        filings=filings,
+        fetch_cache=fetch_cache,
     )
 
     if not observations:

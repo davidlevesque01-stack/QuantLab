@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 
@@ -43,6 +44,12 @@ from collectors.warrants.src.sec_8k_warrant_text_extraction import fetch_documen
 DEFAULT_MODEL = "claude-sonnet-5"
 
 DEFAULT_MAX_TOKENS = 2048
+
+# Plus conservateur que sec_8k_warrant_discovery.DEFAULT_MAX_WORKERS (6) :
+# chaque appel a un coût API réel et est soumis aux limites de débit
+# d'Anthropic, contrairement aux requêtes SEC.gov (gratuites, limite
+# de débit plus généreuse) — SEC-17.
+DEFAULT_LLM_MAX_WORKERS = 3
 
 VALID_KINDS = ("share_quantity", "exercise_price", "expiration_years")
 
@@ -202,6 +209,67 @@ def extract_warrant_terms_llm(
     return parse_llm_response(response_text, document_text)
 
 
+def _llm_terms_for_candidate(
+    filing,
+    *,
+    user_agent,
+    api_key,
+    model,
+    max_tokens,
+    timeout_seconds,
+    fetch_cache,
+):
+    """
+    Traite UN filing candidat : ouvre son document principal, l'envoie
+    au modèle, et retourne les observations trouvées (peut être vide).
+    Isolé pour exécution parallèle (SEC-17).
+    """
+
+    index_url = filing["filing_index_url"]
+
+    if index_url is None:
+        return []
+
+    def _fetch_and_parse(url):
+        return parse_filing_index_documents(
+            fetch_url(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+        )
+
+    if fetch_cache is not None:
+        documents = fetch_cache.get_index_documents(index_url, _fetch_and_parse)
+    else:
+        documents = _fetch_and_parse(index_url)
+
+    main_document = find_main_document(documents)
+
+    if main_document is None:
+        return []
+
+    def _fetch_text(url):
+        return fetch_document_text(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+
+    if fetch_cache is not None:
+        document_text = fetch_cache.get_document_text(main_document["url"], _fetch_text)
+    else:
+        document_text = _fetch_text(main_document["url"])
+
+    return [
+        {
+            "accession_number": filing["accession_number"],
+            "document_url": main_document["url"],
+            "filed_date": filing["filing_date"],
+            "form_type": filing["form_type"],
+            **observation,
+        }
+        for observation in extract_warrant_terms_llm(
+            document_text,
+            api_key=api_key,
+            model=model,
+            max_tokens=max_tokens,
+        )
+    ]
+
+
 def discover_and_extract_warrant_terms_for_cik_llm(
     cik,
     *,
@@ -210,6 +278,9 @@ def discover_and_extract_warrant_terms_for_cik_llm(
     model=DEFAULT_MODEL,
     max_tokens=DEFAULT_MAX_TOKENS,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
+    max_workers=DEFAULT_LLM_MAX_WORKERS,
 ):
     """
     Pour un CIK : liste l'historique complet des 8-K (SEC-12) candidats
@@ -217,61 +288,41 @@ def discover_and_extract_warrant_terms_for_cik_llm(
     document PRINCIPAL de chacun (pas les exhibits, mêmes que SEC-10),
     et y applique l'extraction LLM plutôt que le regex.
 
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik` — le
+    fetch_cache est particulièrement utile ici, puisque SEC-10 (regex)
+    et ce pipeline LLM ont besoin du MÊME texte de document principal
+    pour les mêmes filings candidats. `max_workers` par défaut plus bas
+    que les autres pipelines (voir DEFAULT_LLM_MAX_WORKERS) : chaque
+    candidat traité en parallèle ici déclenche un appel API payant,
+    contrairement aux requêtes SEC.gov gratuites des autres pipelines.
+
     Même forme de résultat que
     `sec_8k_warrant_text_extraction.discover_and_extract_warrant_terms_for_cik`,
     prête à persister dans la même table.
     """
 
-    filings = fetch_all_8k_filings(
-        cik,
-        user_agent=user_agent,
-        timeout_seconds=timeout_seconds,
-    )
+    if filings is None:
+        filings = fetch_all_8k_filings(
+            cik,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
 
     candidates = filter_candidate_filings(filings)
 
-    results = []
-
-    for filing in candidates:
-
-        index_url = filing["filing_index_url"]
-
-        if index_url is None:
-            continue
-
-        index_html = fetch_url(
-            index_url,
-            user_agent=user_agent,
-            timeout_seconds=timeout_seconds,
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        per_filing_results = executor.map(
+            lambda filing: _llm_terms_for_candidate(
+                filing,
+                user_agent=user_agent,
+                api_key=api_key,
+                model=model,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+                fetch_cache=fetch_cache,
+            ),
+            candidates,
         )
 
-        documents = parse_filing_index_documents(index_html)
-        main_document = find_main_document(documents)
-
-        if main_document is None:
-            continue
-
-        document_text = fetch_document_text(
-            main_document["url"],
-            user_agent=user_agent,
-            timeout_seconds=timeout_seconds,
-        )
-
-        for observation in extract_warrant_terms_llm(
-            document_text,
-            api_key=api_key,
-            model=model,
-            max_tokens=max_tokens,
-        ):
-
-            results.append(
-                {
-                    "accession_number": filing["accession_number"],
-                    "document_url": main_document["url"],
-                    "filed_date": filing["filing_date"],
-                    "form_type": filing["form_type"],
-                    **observation,
-                }
-            )
-
-    return results
+        return [observation for results in per_filing_results for observation in results]
