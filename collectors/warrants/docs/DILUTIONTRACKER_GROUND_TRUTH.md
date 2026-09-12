@@ -83,6 +83,40 @@ correct U+2019 codepoint is genuinely what's stored. The garbling was a terminal
 artifact (in both an ad hoc Bash-tool print and the user's `psql`/PowerShell session), not a
 data or extraction bug — no code change was needed.
 
+### Manual CSV-vs-DilutionTracker line-by-line comparison (2026-09-12)
+
+Using `export_warrant_diagnostics.py`'s CSV export (with direct EDGAR filing links) against the
+live DilutionTracker interface. Confirmed 4 of the 4 March 2025 series checked, all present and
+numerically consistent once the known 1-for-35 split (SEC-11) is applied to the raw figures:
+
+| Series (DilutionTracker) | Post-split (DT) | Raw found (CSV) | Ratio |
+|---|---|---|---|
+| March 2025 Warrant | $70.00 / 20,957 | $2.00 / 733,500 (filed 2025-03-27) | 35.0 |
+| March 2025 Warrant 2 | $70.00 / 36,328 | $2.00 / 1,271,500 (filed 2025-03-28) | 35.0 |
+| March 2025 Series C-1 | $43.75 / 69,877 | $1.25 / 2,445,700 (filed 2025-03-12) | 35.0 |
+| March 2025 Series C-2 | $43.75 / 34,938 | $1.25 / 1,222,850 (filed 2025-03-12) | 35.0 |
+
+Bonus find from the same 2025-03-12 filing, not yet in this document's table: "Existing
+Warrants" repriced from $4.28 to $1.25 (a reduced-exercise-price inducement, not a new series).
+
+**"June 2026 Common Warrant" ($13.30, 378,947, no expiration listed) investigated — absent from
+both `raw.sec_8k_warrant_exhibit` and `raw.sec_8k_warrant_text_extraction`, for two independent,
+non-overlapping reasons**:
+
+1. It's disclosed in a **424B4 prospectus** (accession 0001213900-26-073848, filed 2026-06-30:
+   "Common Stock Purchase Warrants to Purchase up to 13,263,159 shares of Common Stock"), not an
+   8-K — SEC-09/10/15 only ever fetch 8-K filings filtered on items 1.01/3.02, so a 424B4 is
+   never even in the candidate set regardless of content. Filed as **SEC-18**: registered
+   S-1/424B offerings are a completely uncovered filing type for warrant discovery.
+2. Independently of (1), the raw figure would need the same split treatment as everything else:
+   13,263,159 / 378,947 = 35.0 exactly — confirms WRT-06 would still apply here too, once
+   SEC-18 makes this warrant discoverable at all.
+
+**Conclusion**: every TNON warrant checked against DilutionTracker so far is present and
+numerically correct in our RAW tables — the only reason none of them "match" DilutionTracker's
+display directly is the not-yet-applied reverse-split ratio (WRT-06, now reprioritized to the
+top of the Ready queue given how consistently this affects every single series checked).
+
 ### Warrants
 
 | Series | Status | Exercise Price | Total Issued | Expiration |
