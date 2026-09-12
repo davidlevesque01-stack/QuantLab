@@ -68,6 +68,62 @@ def test_extract_reverse_split_returns_none_when_no_ratio_found():
     assert extract_reverse_split("Item 5.03. Some unrelated amendment.") is None
 
 
+# Real excerpt fetched from TNON's 8-K (accession 0001213900-23-084331,
+# ea187680-8k_tenonmed.htm, filed 2023-11-07) — SEC-16 regression fixture:
+# this filing's "became effective at ... on <date>" phrasing (no "as of")
+# was invisible to the original EFFECTIVE_DATE_PATTERN, even though the
+# ratio itself was always extracted correctly (only effective_date was
+# NULL). Found via SEC-12's full-history pagination.
+REAL_TNON_2023_SPLIT_8K_EXCERPT = (
+    "Tenon Medical, Inc. (the “Company”) filed on November 1, 2023 a "
+    "Certificate of Amendment to the Second Amended and Restated "
+    "Certificate of Incorporation of the Company with the Secretary of "
+    "State of the State of Delaware (the “Certificate of Amendment”) "
+    "that provides for a 1-for-10 reverse stock split (the “Split”) of "
+    "its shares of common stock, par value $0.001 per share (the "
+    "“Common Stock”) that became effective at 12:01 a.m. on "
+    "November 2, 2023."
+)
+
+
+# Real excerpt fetched from GPUS's 8-K (accession 0001214659-19-002112,
+# p3141908k.htm, filed 2019-03-14) — SEC-16 regression fixture: the
+# "became effective in the State of Delaware on <date>" phrasing has an
+# intervening clause between "effective" and "on <date>", also invisible
+# to the original pattern. The digit-format ratio ("1-for-20") and the
+# effective-date sentence are far apart in the real document (exhibit
+# index vs. body) — combined here with "..." exactly as the existing
+# TNON fixture above does, both pieces quoted verbatim from the real
+# filing.
+REAL_GPUS_2019_SPLIT_8K_EXCERPT = (
+    "The Company filed a Certificate of Amendment to its Certificate of "
+    "Incorporation with the State of Delaware effectuating the Reverse "
+    "Stock Split on March 14, 2019. The Certificate became effective in "
+    "the State of Delaware on March 14, 2019. ... Exhibit No. "
+    "Description 3.1 Certificate of Amendment to Certificate of "
+    "Incorporation (1-for-20 Reverse Stock Split of Common Stock) filed "
+    "with the Delaware Secretary of State on March 14, 2019."
+)
+
+
+def test_extract_reverse_split_finds_became_effective_at_phrasing():
+    result = extract_reverse_split(REAL_TNON_2023_SPLIT_8K_EXCERPT)
+
+    assert result is not None
+    assert result["ratio_new"] == 1
+    assert result["ratio_old"] == 10
+    assert result["effective_date"] == "2023-11-02"
+
+
+def test_extract_reverse_split_finds_became_effective_in_state_phrasing():
+    result = extract_reverse_split(REAL_GPUS_2019_SPLIT_8K_EXCERPT)
+
+    assert result is not None
+    assert result["ratio_new"] == 1
+    assert result["ratio_old"] == 20
+    assert result["effective_date"] == "2019-03-14"
+
+
 def test_filter_split_candidate_filings_keeps_only_3_03_or_5_03():
     filings = [
         {"accession_number": "A", "item_codes": "items 3.03, 5.03, 7.01and9.01"},
