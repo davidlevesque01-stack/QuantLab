@@ -181,6 +181,23 @@ description-only exhibit matching:
     recurring pattern on older filings (NULL here too, same as TNON's 2023-11-07 split), not a
     one-off quirk of a single document's phrasing.
 
+### SEC-15/SEC-17 real backfill validation (2026-09-12)
+
+Real (non-rollback) `run_sec_collection.py --tickers GPUS --use-llm-extraction` (Claude Sonnet
+5), made practical by SEC-17's speedup (full run in ~3m40s vs. an estimated 20-30+ min without
+it). Result: `warrant_text_extraction_llm: inserted=345, skipped=0` — 150 `share_quantity`, 112
+`exercise_price`, 83 `expiration_years` — vs. the regex path's (SEC-10) single row across the
+same full history.
+
+Confirmed new discoveries spanning **Series C and Series G warrants** (late 2024 – early 2025),
+not present anywhere in this document's current GPUS table — e.g. Series G Warrants
+consistently priced at **$5.92** with a **5-year term** across several 2024-12 through 2025-04
+filings (multiple tranches of the same series), and Series C Warrants (422,337 and 16,049
+shares, filed 2024-12-23; 4,223 shares, filed 2024-12-13). Given the sheer volume (345 rows),
+this is not fully reconciled fact-by-fact against a fresh DilutionTracker pull here — the
+existing GPUS warrant table below predates this backfill and should be treated as incomplete
+for the 2023-2025 period specifically, not as a contradiction.
+
 ### Warrants
 
 Several show `Total Issued: 0` — never exercised, likely expired/cancelled; still worth
