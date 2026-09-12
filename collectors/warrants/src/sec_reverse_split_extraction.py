@@ -13,6 +13,20 @@ Validé sur un cas réel (TNON, 8-K du 2026-08-10, accession
 confirme exactement le ratio ~35x déjà déduit en comparant nos données
 brutes à DilutionTracker sur 3 séries de warrants indépendantes.
 
+SEC-16 : `EFFECTIVE_DATE_PATTERN` ne matchait que cette formulation
+précise ("effective as of ... on <date>"). Deux filings réels plus
+anciens, atteints par SEC-12 (pagination de l'historique complet), ont
+révélé des formulations différentes — le ratio était toujours extrait
+correctement, seule la date d'effet restait NULL :
+- TNON, 2023-11-07 : « ... became effective at 12:01 a.m. on
+  November 2, 2023 »
+- GPUS, 2019-03-14 : « ... became effective in the State of Delaware
+  on March 14, 2019 »
+Généralisé en un motif plus souple (« effective » suivi de texte
+libre borné, puis « on <date> ») plutôt que d'empiler un motif par
+formulation — même logique que SEC-15 (formulations juridiques non
+bornées à travers les émetteurs/années).
+
 Portée volontairement minimale (capture RAW de l'événement de split
 seulement) : appliquer rétroactivement le ratio aux lignes déjà
 capturées dans raw.sec_8k_warrant_text_extraction nécessite un concept
@@ -43,7 +57,8 @@ SPLIT_RATIO_PATTERN = re.compile(
 )
 
 EFFECTIVE_DATE_PATTERN = re.compile(
-    r"effective as of[^,]*?on (?P<date>[A-Z][a-z]+ \d{1,2}, \d{4})"
+    r"effective\b.{0,60}?on (?P<date>[A-Z][a-z]+ \d{1,2}, \d{4})",
+    re.IGNORECASE,
 )
 
 
