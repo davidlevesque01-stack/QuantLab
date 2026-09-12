@@ -50,6 +50,7 @@ FIELDNAMES = [
     "filing_url",
     "raw_snippet",
     "match_reason",
+    "extraction_method",
 ]
 
 _TEXT_EXTRACTION_UNIT_BY_KIND = {
@@ -187,6 +188,7 @@ def build_text_extraction_diagnostic_rows(ticker, cik, extractions):
                 "accession_number": extraction.get("accession_number"),
                 "filing_url": extraction.get("document_url"),
                 "raw_snippet": extraction.get("raw_snippet"),
+                "extraction_method": extraction.get("extraction_method"),
             }
         )
 

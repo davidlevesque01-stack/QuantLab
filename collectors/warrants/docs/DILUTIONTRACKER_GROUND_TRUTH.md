@@ -47,6 +47,38 @@ Real (non-rollback) run of `run_sec_collection.py --tickers TNON` after implemen
   `sec_reverse_split_extraction.py` didn't match this filing's phrasing — a known, narrow
   extraction gap (ratio itself was still extracted correctly), not yet fixed.
 
+### SEC-15 real backfill validation (2026-09-12)
+
+Real (non-rollback) `run_sec_collection.py --tickers TNON --use-llm-extraction` (Claude Sonnet
+5) against the same full 8-K history as SEC-12. Result: `warrant_text_extraction_llm:
+inserted=69, skipped=0` — vs. the regex path's (SEC-10) total of only 9 rows across the same
+history. Breakdown: 26 `share_quantity`, 26 `exercise_price`, 17 `expiration_years`.
+
+Confirmed genuine new discoveries, all from filings/phrasings the regex extractor never
+matched, covering warrant series **older than this document's current TNON table** (which
+starts at June 2023) — worth treating as additions to track, not yet reconciled against a fresh
+DilutionTracker pull:
+
+- **April 2022 Representative's Warrant** (IPO underwriter warrant): 96,000 shares, $5.00
+  exercise price, exercisable April 29, 2022 – April 29, 2027 (5-year term).
+- **A warrant series with a down-round reset clause**: $0.56 initial exercise price, reset to
+  $0.28 on 2023-07-16 (greater of $0.28 or 100% of last VWAP), 5-year term. Note: these dollar
+  figures likely predate one or both of the reverse splits found via SEC-11/SEC-12 (2023-11-07
+  1-for-10, 2026-08-10 1-for-35) — not yet reconciled to post-split terms.
+- **Three more warrant series** (pre-split dollar figures, likely also affected by one or both
+  splits above): $1.94 exercise / 45,000 shares / 5-year term; $1.2705 exercise / 258,374 shares
+  / 5-year term (filing also mentions "Ascent" receiving 125,675 and "WZC" receiving 31,419 of
+  these warrants — sums don't fully reconcile to 258,374, worth a closer read of the source
+  filing); $4.2756 exercise / 16,214 shares / 5-year term.
+
+**Encoding bug found alongside this** (filed separately, not a SEC-15 defect — affects SEC-10's
+regex path too): several `raw_snippet` values on these older filings contain mojibake
+("CompanyÆs" instead of "Company's", "ôWarrantsö" instead of curly-quoted "Warrants") — the
+numeric facts themselves are still correct and verified against the source filings, only the
+quoted text's typographic quotes/apostrophes are corrupted. Root cause: `fetch_document_text`
+(`sec_8k_warrant_text_extraction.py`) always decodes as UTF-8; these older EDGAR filings are
+likely served in a different encoding (cp1252 suspected).
+
 ### Warrants
 
 | Series | Status | Exercise Price | Total Issued | Expiration |

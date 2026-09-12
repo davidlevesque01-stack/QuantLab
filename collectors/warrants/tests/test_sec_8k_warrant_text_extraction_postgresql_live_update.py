@@ -38,6 +38,7 @@ OBSERVATIONS = [
         "label": "Each Series A",
         "exercise_price": 5.02,
         "raw_snippet": "Each Series A Warrant has an exercise price of $5.02 per share",
+        "extraction_method": "regex",
     }
 ]
 
