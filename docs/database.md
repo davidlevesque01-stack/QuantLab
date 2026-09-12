@@ -794,9 +794,19 @@ Nasdaq XML
 -> PostgreSQL
 ```
 
-Les colonnes CORE utilisent actuellement `TIMESTAMP` sans fuseau horaire.
+Les colonnes CORE utilisent actuellement `TIMESTAMP` sans fuseau horaire. Aucune migration de type de colonne n'a été nécessaire pour formaliser la sémantique ci-dessous.
 
-La sémantique précise du fuseau horaire Nasdaq reste à formaliser avant certaines utilisations analytiques avancées.
+### Sémantique du fuseau horaire (formalisée — BT-00)
+
+Convention désormais explicite : tout `TIMESTAMP` naïf persisté par QuantLab (HALT Nasdaq, dates de filing SEC, et `market_bar_1m` à venir avec BT-01) représente l'heure locale du marché Nasdaq (`America/New_York`), jamais UTC.
+
+Cette convention est portée par `shared/calendar/trading_calendar.py` :
+
+- `NASDAQ_TZ` — le fuseau de référence (`ZoneInfo("America/New_York")`);
+- `get_session_bounds(day)` — les bornes de session pre-market (04:00) / regular / after-hours (20:00) pour un jour de marché donné;
+- `localize(naive_dt)` — attache `NASDAQ_TZ` à un timestamp naïf, pour les comparaisons avec une source tz-aware (ex. un futur fournisseur de données intraday).
+
+Voir aussi `docs/architecture.md` §22 et `docs/backtesting/BACKTESTING_COMPONENT.md`.
 
 ---
 
@@ -1362,14 +1372,13 @@ Complete test suite                   : 70/70 PASS
 
 Travaux encore ouverts :
 
-- calendrier officiel de marché;
+- calendrier officiel de marché (modélisation PostgreSQL `reference.trading_day` restant à faire — les bornes de session sont désormais portées par `shared/calendar/trading_calendar.py`, voir §15);
 - analytics PostgreSQL;
 - sauvegarde / restauration;
 - orchestration centralisée;
 - exécution planifiée et à la demande;
 - préparation TEST / PROD;
-- stratégie de gestion des secrets;
-- formalisation complète de la timezone Nasdaq.
+- stratégie de gestion des secrets.
 
 Le champ `core.nasdaq_halt_episode.market` reste physiquement nullable, même si les données validées actuelles ne contiennent pas de `NULL`.
 
