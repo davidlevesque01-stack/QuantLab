@@ -13,6 +13,15 @@ ticker absent de company_tickers.json (émetteur radié/acquis depuis)
 est résolu par repli via recherche de nom, en utilisant
 core.nasdaq_halt_episode.issue_name comme source de nom fiable.
 
+SEC-17 : l'historique 8-K complet (SEC-12) et un cache de requêtes
+(SharedFetchCache) sont récupérés UNE SEULE FOIS par ticker et partagés
+entre les 4 pipelines qui en dépendent (exhibits, extraction texte
+regex/LLM, reverse splits) — avant ça, chacun refaisait sa propre
+pagination complète, et les 3 premiers (mêmes filings candidats
+1.01/3.02) refaisaient chacun la même requête d'index/document. Chaque
+pipeline traite en plus ses filings candidats en parallèle (threads),
+ce sont des requêtes réseau indépendantes.
+
 Usage :
     python -m collectors.warrants.src.run_sec_collection --tickers TNON,ABCD
     python -m collectors.warrants.src.run_sec_collection --tickers TNON \
@@ -29,6 +38,7 @@ import argparse
 import os
 from datetime import datetime, timezone
 
+from collectors.warrants.src.sec_8k_warrant_discovery import fetch_all_8k_filings
 from collectors.warrants.src.sec_8k_warrant_exhibit_collector import (
     collect_ticker_8k_warrant_exhibits,
 )
@@ -38,7 +48,11 @@ from collectors.warrants.src.sec_8k_warrant_llm_extraction_collector import (
 from collectors.warrants.src.sec_8k_warrant_text_extraction_collector import (
     collect_ticker_8k_warrant_text_extraction,
 )
-from collectors.warrants.src.sec_cik_resolution import fetch_ticker_cik_map
+from collectors.warrants.src.sec_cik_resolution import (
+    fetch_ticker_cik_map,
+    resolve_cik,
+)
+from collectors.warrants.src.sec_fetch_cache import SharedFetchCache
 from collectors.warrants.src.sec_llm_warrant_extraction import DEFAULT_MODEL
 from collectors.warrants.src.sec_reverse_split_collector import (
     collect_ticker_reverse_splits,
@@ -114,11 +128,28 @@ def run_collection(
     regex existante (SEC-10), jamais un remplacement — chaque appel API
     a un coût réel, donc explicitement opt-in (jamais déclenché par
     défaut) plutôt qu'activé automatiquement.
+
+    SEC-17 : les 4 pipelines de découverte basés sur les 8-K (exhibits,
+    extraction texte regex/LLM, reverse splits) refaisaient chacun leur
+    propre pagination complète de l'historique, et les 3 premiers
+    (mêmes filings candidats 1.01/3.02) refaisaient chacun les mêmes
+    requêtes d'index/document. L'historique est maintenant récupéré une
+    seule fois par ticker et partagé (`filings`), de même qu'un cache de
+    requêtes partagé entre pipelines (`fetch_cache`, voir
+    `SharedFetchCache`).
     """
 
     results = []
 
     for ticker in tickers:
+
+        cik = resolve_cik(ticker, ticker_cik_map)
+        filings = (
+            fetch_all_8k_filings(cik, user_agent=user_agent, timeout_seconds=timeout_seconds)
+            if cik is not None
+            else None
+        )
+        fetch_cache = SharedFetchCache() if cik is not None else None
 
         log_progress(f"{ticker}: starting (warrant XBRL facts, SEC-06)...")
         warrant_result = collect_ticker_warrants(
@@ -147,6 +178,8 @@ def run_collection(
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
+            filings=filings,
+            fetch_cache=fetch_cache,
         )
         log_progress(f"{ticker}: warrant_exhibits -> {exhibits_result}")
 
@@ -159,6 +192,8 @@ def run_collection(
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
+            filings=filings,
+            fetch_cache=fetch_cache,
         )
         log_progress(f"{ticker}: warrant_text_extraction -> {text_extraction_result}")
 
@@ -171,6 +206,8 @@ def run_collection(
             ticker_cik_map,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
+            filings=filings,
+            fetch_cache=fetch_cache,
         )
         log_progress(f"{ticker}: reverse_splits -> {reverse_split_result}")
 
@@ -189,6 +226,8 @@ def run_collection(
                 api_key=anthropic_api_key,
                 model=llm_model,
                 timeout_seconds=timeout_seconds,
+                filings=filings,
+                fetch_cache=fetch_cache,
             )
             log_progress(
                 f"{ticker}: warrant_text_extraction_llm -> {llm_text_extraction_result}"

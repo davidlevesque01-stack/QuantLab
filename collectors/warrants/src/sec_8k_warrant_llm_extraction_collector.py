@@ -31,12 +31,19 @@ def collect_ticker_8k_warrant_text_extraction_llm(
     model=DEFAULT_MODEL,
     max_tokens=DEFAULT_MAX_TOKENS,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
 ):
     """
     Extrait (via LLM) et persiste les modalités de warrants trouvées
     dans le texte des 8-K pour un ticker. Retourne un statut explicite
     si le ticker n'a pas de CIK connu ou si aucune observation n'a été
     extraite.
+
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik` — le
+    partage de `fetch_cache` avec SEC-10 est particulièrement utile ici
+    (même document principal nécessaire aux deux pipelines).
     """
 
     cik = resolve_cik(ticker, ticker_cik_map)
@@ -57,6 +64,8 @@ def collect_ticker_8k_warrant_text_extraction_llm(
         model=model,
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,
+        filings=filings,
+        fetch_cache=fetch_cache,
     )
 
     if not observations:

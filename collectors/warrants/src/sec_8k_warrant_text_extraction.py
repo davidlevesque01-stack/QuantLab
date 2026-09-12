@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import html
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from collectors.warrants.src.sec_8k_warrant_discovery import (
+    DEFAULT_MAX_WORKERS,
     fetch_all_8k_filings,
     fetch_url,
     filter_candidate_filings,
@@ -162,11 +164,62 @@ def extract_warrant_terms(text):
     return observations
 
 
+def _terms_for_candidate(filing, *, user_agent, timeout_seconds, fetch_cache):
+    """
+    Traite UN filing candidat : ouvre son document principal, en
+    extrait le texte, et retourne les observations regex trouvées
+    (peut être vide). Isolé pour exécution parallèle (SEC-17).
+    """
+
+    index_url = filing["filing_index_url"]
+
+    if index_url is None:
+        return []
+
+    def _fetch_and_parse(url):
+        return parse_filing_index_documents(
+            fetch_url(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+        )
+
+    if fetch_cache is not None:
+        documents = fetch_cache.get_index_documents(index_url, _fetch_and_parse)
+    else:
+        documents = _fetch_and_parse(index_url)
+
+    main_document = find_main_document(documents)
+
+    if main_document is None:
+        return []
+
+    def _fetch_text(url):
+        return fetch_document_text(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+
+    if fetch_cache is not None:
+        document_text = fetch_cache.get_document_text(main_document["url"], _fetch_text)
+    else:
+        document_text = _fetch_text(main_document["url"])
+
+    return [
+        {
+            "accession_number": filing["accession_number"],
+            "document_url": main_document["url"],
+            "filed_date": filing["filing_date"],
+            "form_type": filing["form_type"],
+            "extraction_method": "regex",
+            **observation,
+        }
+        for observation in extract_warrant_terms(document_text)
+    ]
+
+
 def discover_and_extract_warrant_terms_for_cik(
     cik,
     *,
     user_agent,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
+    max_workers=DEFAULT_MAX_WORKERS,
 ):
     """
     Pour un CIK : liste l'historique COMPLET des 8-K (SEC-12, plus
@@ -175,57 +228,35 @@ def discover_and_extract_warrant_terms_for_cik(
     (pas les exhibits), en extrait le texte, et y applique
     extract_warrant_terms.
 
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik` — même
+    convention de partage entre pipelines de découverte qui traitent les
+    mêmes filings candidats (1.01/3.02). Traitement en parallèle
+    (`max_workers` threads) des filings candidats.
+
     Retourne une liste d'observations aplaties, chacune annotée de son
     accession_number, document_url, filed_date et form_type d'origine,
     prêtes à persister.
     """
 
-    filings = fetch_all_8k_filings(
-        cik,
-        user_agent=user_agent,
-        timeout_seconds=timeout_seconds,
-    )
+    if filings is None:
+        filings = fetch_all_8k_filings(
+            cik,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
 
     candidates = filter_candidate_filings(filings)
 
-    results = []
-
-    for filing in candidates:
-
-        index_url = filing["filing_index_url"]
-
-        if index_url is None:
-            continue
-
-        index_html = fetch_url(
-            index_url,
-            user_agent=user_agent,
-            timeout_seconds=timeout_seconds,
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        per_filing_results = executor.map(
+            lambda filing: _terms_for_candidate(
+                filing,
+                user_agent=user_agent,
+                timeout_seconds=timeout_seconds,
+                fetch_cache=fetch_cache,
+            ),
+            candidates,
         )
 
-        documents = parse_filing_index_documents(index_html)
-        main_document = find_main_document(documents)
-
-        if main_document is None:
-            continue
-
-        document_text = fetch_document_text(
-            main_document["url"],
-            user_agent=user_agent,
-            timeout_seconds=timeout_seconds,
-        )
-
-        for observation in extract_warrant_terms(document_text):
-
-            results.append(
-                {
-                    "accession_number": filing["accession_number"],
-                    "document_url": main_document["url"],
-                    "filed_date": filing["filing_date"],
-                    "form_type": filing["form_type"],
-                    "extraction_method": "regex",
-                    **observation,
-                }
-            )
-
-    return results
+        return [observation for results in per_filing_results for observation in results]

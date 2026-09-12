@@ -36,9 +36,11 @@ CORE (lié à WRT-06), explicitement hors scope ici.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from collectors.warrants.src.sec_8k_warrant_discovery import (
+    DEFAULT_MAX_WORKERS,
     fetch_all_8k_filings,
     fetch_url,
     find_main_document,
@@ -117,11 +119,67 @@ def extract_reverse_split(text):
     }
 
 
+def _split_for_candidate(filing, *, user_agent, timeout_seconds, fetch_cache):
+    """
+    Traite UN filing candidat : ouvre son document principal et y
+    cherche un événement de split (None si aucun trouvé). Isolé pour
+    exécution parallèle (SEC-17). Contrairement aux pipelines 1.01/3.02
+    (exhibits/SEC-10/SEC-15), ce pipeline traite un ensemble de filings
+    candidats différent (3.03/5.03) — `fetch_cache` reste accepté par
+    cohérence d'API, mais n'a d'effet que si un autre appel a déjà
+    traité EXACTEMENT le même filing (rare, aucun recoupement garanti).
+    """
+
+    index_url = filing["filing_index_url"]
+
+    if index_url is None:
+        return None
+
+    def _fetch_and_parse(url):
+        return parse_filing_index_documents(
+            fetch_url(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+        )
+
+    if fetch_cache is not None:
+        documents = fetch_cache.get_index_documents(index_url, _fetch_and_parse)
+    else:
+        documents = _fetch_and_parse(index_url)
+
+    main_document = find_main_document(documents)
+
+    if main_document is None:
+        return None
+
+    def _fetch_text(url):
+        return fetch_document_text(url, user_agent=user_agent, timeout_seconds=timeout_seconds)
+
+    if fetch_cache is not None:
+        document_text = fetch_cache.get_document_text(main_document["url"], _fetch_text)
+    else:
+        document_text = _fetch_text(main_document["url"])
+
+    split_event = extract_reverse_split(document_text)
+
+    if split_event is None:
+        return None
+
+    return {
+        "accession_number": filing["accession_number"],
+        "document_url": main_document["url"],
+        "filed_date": filing["filing_date"],
+        "form_type": filing["form_type"],
+        **split_event,
+    }
+
+
 def discover_and_extract_reverse_splits_for_cik(
     cik,
     *,
     user_agent,
     timeout_seconds=30,
+    filings=None,
+    fetch_cache=None,
+    max_workers=DEFAULT_MAX_WORKERS,
 ):
     """
     Pour un CIK : liste l'historique COMPLET des 8-K (SEC-12, plus
@@ -130,56 +188,31 @@ def discover_and_extract_reverse_splits_for_cik(
     split. Retourne une liste d'événements de split trouvés (un par
     filing où un ratio a été reconnu), chacun annoté de son
     accession_number, document_url, filed_date et form_type.
+
+    `filings`/`fetch_cache` (SEC-17) : voir
+    `sec_8k_warrant_discovery.discover_warrant_exhibits_for_cik`.
+    Traitement en parallèle (`max_workers` threads) des filings
+    candidats.
     """
 
-    filings = fetch_all_8k_filings(
-        cik,
-        user_agent=user_agent,
-        timeout_seconds=timeout_seconds,
-    )
+    if filings is None:
+        filings = fetch_all_8k_filings(
+            cik,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
 
     candidates = filter_split_candidate_filings(filings)
 
-    results = []
-
-    for filing in candidates:
-
-        index_url = filing["filing_index_url"]
-
-        if index_url is None:
-            continue
-
-        index_html = fetch_url(
-            index_url,
-            user_agent=user_agent,
-            timeout_seconds=timeout_seconds,
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        split_events = executor.map(
+            lambda filing: _split_for_candidate(
+                filing,
+                user_agent=user_agent,
+                timeout_seconds=timeout_seconds,
+                fetch_cache=fetch_cache,
+            ),
+            candidates,
         )
 
-        documents = parse_filing_index_documents(index_html)
-        main_document = find_main_document(documents)
-
-        if main_document is None:
-            continue
-
-        document_text = fetch_document_text(
-            main_document["url"],
-            user_agent=user_agent,
-            timeout_seconds=timeout_seconds,
-        )
-
-        split_event = extract_reverse_split(document_text)
-
-        if split_event is None:
-            continue
-
-        results.append(
-            {
-                "accession_number": filing["accession_number"],
-                "document_url": main_document["url"],
-                "filed_date": filing["filing_date"],
-                "form_type": filing["form_type"],
-                **split_event,
-            }
-        )
-
-    return results
+        return [event for event in split_events if event is not None]
