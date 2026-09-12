@@ -223,6 +223,7 @@ def discover_and_extract_warrant_terms_for_cik(
                     "document_url": main_document["url"],
                     "filed_date": filing["filing_date"],
                     "form_type": filing["form_type"],
+                    "extraction_method": "regex",
                     **observation,
                 }
             )

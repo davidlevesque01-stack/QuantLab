@@ -509,7 +509,8 @@ def read_sec_8k_warrant_text_extractions(conn, cik):
                 share_quantity,
                 exercise_price,
                 expiration_years,
-                raw_snippet
+                raw_snippet,
+                extraction_method
             FROM raw.sec_8k_warrant_text_extraction
             WHERE cik = %s
             ORDER BY accession_number, kind;
@@ -550,6 +551,7 @@ def write_sec_8k_warrant_text_extractions(conn, cik, observations, retrieved_at)
             observation.get("exercise_price"),
             observation.get("expiration_years"),
             observation["raw_snippet"],
+            observation.get("extraction_method"),
             retrieved_at,
         )
 
@@ -577,11 +579,12 @@ def write_sec_8k_warrant_text_extractions(conn, cik, observations, retrieved_at)
                 exercise_price,
                 expiration_years,
                 raw_snippet,
+                extraction_method,
                 retrieved_at
             )
             VALUES (
                 %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (
                 cik,

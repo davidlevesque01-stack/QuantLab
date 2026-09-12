@@ -17,6 +17,10 @@ Usage :
     python -m collectors.warrants.src.run_sec_collection --tickers TNON,ABCD
     python -m collectors.warrants.src.run_sec_collection --tickers TNON \
         --user-agent "quantlab-fma contact@example.com"
+
+    # SEC-15 (extraction LLM, en plus du regex, jamais à la place) :
+    python -m collectors.warrants.src.run_sec_collection --tickers TNON \
+        --use-llm-extraction --anthropic-api-key sk-ant-...
 """
 
 from __future__ import annotations
@@ -28,10 +32,14 @@ from datetime import datetime, timezone
 from collectors.warrants.src.sec_8k_warrant_exhibit_collector import (
     collect_ticker_8k_warrant_exhibits,
 )
+from collectors.warrants.src.sec_8k_warrant_llm_extraction_collector import (
+    collect_ticker_8k_warrant_text_extraction_llm,
+)
 from collectors.warrants.src.sec_8k_warrant_text_extraction_collector import (
     collect_ticker_8k_warrant_text_extraction,
 )
 from collectors.warrants.src.sec_cik_resolution import fetch_ticker_cik_map
+from collectors.warrants.src.sec_llm_warrant_extraction import DEFAULT_MODEL
 from collectors.warrants.src.sec_reverse_split_collector import (
     collect_ticker_reverse_splits,
 )
@@ -45,6 +53,8 @@ from collectors.warrants.src.sec_warrant_collector import collect_ticker_warrant
 
 
 USER_AGENT_ENV = "QUANTLAB_SEC_USER_AGENT"
+
+ANTHROPIC_API_KEY_ENV = "QUANTLAB_ANTHROPIC_API_KEY"
 
 
 def log_progress(message):
@@ -89,6 +99,9 @@ def run_collection(
     *,
     user_agent,
     timeout_seconds=30,
+    use_llm_extraction=False,
+    anthropic_api_key=None,
+    llm_model=DEFAULT_MODEL,
 ):
     """
     Exécute la collecte warrants + shares outstanding pour chaque ticker.
@@ -96,6 +109,11 @@ def run_collection(
     Retourne une liste de résultats (un par ticker), chacun combinant les
     résumés des deux collectes — ne lève pas si un ticker échoue à être
     résolu ou n'a pas de faits taggués : le statut le reflète.
+
+    `use_llm_extraction` (SEC-15) est un pas EN PLUS de l'extraction
+    regex existante (SEC-10), jamais un remplacement — chaque appel API
+    a un coût réel, donc explicitement opt-in (jamais déclenché par
+    défaut) plutôt qu'activé automatiquement.
     """
 
     results = []
@@ -156,6 +174,26 @@ def run_collection(
         )
         log_progress(f"{ticker}: reverse_splits -> {reverse_split_result}")
 
+        llm_text_extraction_result = None
+
+        if use_llm_extraction:
+            log_progress(
+                f"{ticker}: 8-K warrant text extraction via LLM (SEC-15, "
+                f"model={llm_model}, full 8-K history — real API cost per "
+                "call, can take a while)..."
+            )
+            llm_text_extraction_result = collect_ticker_8k_warrant_text_extraction_llm(
+                ticker,
+                ticker_cik_map,
+                user_agent=user_agent,
+                api_key=anthropic_api_key,
+                model=llm_model,
+                timeout_seconds=timeout_seconds,
+            )
+            log_progress(
+                f"{ticker}: warrant_text_extraction_llm -> {llm_text_extraction_result}"
+            )
+
         results.append(
             {
                 "ticker": ticker,
@@ -164,6 +202,7 @@ def run_collection(
                 "warrant_exhibits": exhibits_result,
                 "warrant_text_extraction": text_extraction_result,
                 "reverse_splits": reverse_split_result,
+                "warrant_text_extraction_llm": llm_text_extraction_result,
             }
         )
 
@@ -212,6 +251,32 @@ def build_arg_parser():
         default=30,
     )
 
+    parser.add_argument(
+        "--use-llm-extraction",
+        action="store_true",
+        help=(
+            "Active en plus l'extraction LLM des modalités de warrants "
+            "(SEC-15) — opt-in explicite, chaque appel a un coût API réel. "
+            "Nécessite --anthropic-api-key ou "
+            f"{ANTHROPIC_API_KEY_ENV}."
+        ),
+    )
+
+    parser.add_argument(
+        "--anthropic-api-key",
+        default=None,
+        help=(
+            "Clé API Anthropic pour --use-llm-extraction. À défaut, lue "
+            f"depuis {ANTHROPIC_API_KEY_ENV}."
+        ),
+    )
+
+    parser.add_argument(
+        "--llm-model",
+        default=DEFAULT_MODEL,
+        help=f"Modèle Claude pour --use-llm-extraction (défaut : {DEFAULT_MODEL}).",
+    )
+
     return parser
 
 
@@ -222,6 +287,14 @@ def main():
         args.user_agent,
         os.environ.get(USER_AGENT_ENV),
     )
+
+    anthropic_api_key = args.anthropic_api_key or os.environ.get(ANTHROPIC_API_KEY_ENV)
+
+    if args.use_llm_extraction and not anthropic_api_key:
+        raise ValueError(
+            "--use-llm-extraction requires an Anthropic API key: pass "
+            f"--anthropic-api-key or set {ANTHROPIC_API_KEY_ENV}."
+        )
 
     tickers = parse_tickers(args.tickers)
 
@@ -242,6 +315,9 @@ def main():
         ticker_cik_map,
         user_agent=user_agent,
         timeout_seconds=args.timeout_seconds,
+        use_llm_extraction=args.use_llm_extraction,
+        anthropic_api_key=anthropic_api_key,
+        llm_model=args.llm_model,
     )
 
     for result in results:
@@ -251,6 +327,8 @@ def main():
         print(f"  warrant_exhibits:   {result['warrant_exhibits']}")
         print(f"  warrant_text:       {result['warrant_text_extraction']}")
         print(f"  reverse_splits:     {result['reverse_splits']}")
+        if result["warrant_text_extraction_llm"] is not None:
+            print(f"  warrant_text_llm:   {result['warrant_text_extraction_llm']}")
 
 
 if __name__ == "__main__":

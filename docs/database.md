@@ -146,6 +146,8 @@ Fichiers actuels :
 013_add_filing_date_to_sec_8k_warrant_text_extraction.sql
 014_create_sec_ticker_cik_resolution_schema.sql
 015_create_sec_reverse_split_event_schema.sql
+016_add_match_reason_to_sec_8k_warrant_exhibit.sql
+017_add_extraction_method_to_sec_8k_warrant_text_extraction.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -435,6 +437,57 @@ CORE (différé, lié à WRT-06).
 
 Réutilise le même verrou QuantLab, avec un `objid` distinct :
 `(716203, 9)`.
+
+### 5.18 Migration 016
+
+`016_add_match_reason_to_sec_8k_warrant_exhibit.sql` ajoute à
+`raw.sec_8k_warrant_exhibit` :
+
+```text
+match_reason VARCHAR(30)
+```
+
+SEC-13 : `filter_warrant_exhibits` matche désormais sur deux signaux
+indépendants — la description textuelle de l'exhibit (« FORM OF ...
+WARRANT ») et, en repli, le code d'exhibit `EX-4.x` seul (Item
+601(b)(4) de la Regulation S-K, réservé aux « instruments définissant
+les droits des porteurs de titres »). Certains déposants (ex. GPUS)
+n'écrivent jamais de titre descriptif (« EXHIBIT 4.1 » au lieu de
+« FORM OF PRE-FUNDED WARRANT »), invisibles au seul match textuel.
+`match_reason` (`description` / `exhibit_type` / les deux) garde une
+trace de quel signal a matché — un match par code seul mérite plus de
+scepticisme (EX-4.x couvre aussi des instruments non-warrant, ex. des
+notes convertibles) qu'un match textuel explicite.
+
+Migration additive, non destructive — les lignes déjà capturées avant
+cette migration restent avec `match_reason` à `NULL` (pas de backfill
+rétroactif, cohérent avec `013_add_filing_date_...`).
+
+### 5.19 Migration 017
+
+`017_add_extraction_method_to_sec_8k_warrant_text_extraction.sql`
+ajoute à `raw.sec_8k_warrant_text_extraction` :
+
+```text
+extraction_method VARCHAR(10)  -- CHECK (regex | llm)
+```
+
+SEC-15 : le regex de SEC-10 (§5.14), validé sur un seul filing réel, a
+immédiatement échoué sur 3 autres filings réels du même émetteur
+(formulations différentes pour la quantité/le prix/l'expiration).
+`sec_llm_warrant_extraction.py` ajoute un second chemin d'extraction
+via l'API Claude (modèle Sonnet 5 par défaut), robuste aux formulations
+variées par construction plutôt que par accumulation de motifs regex —
+même discipline `raw_snippet` traçable, même garde-fou anti-
+hallucination (un extrait cité qui n'existe pas mot pour mot dans le
+document source est rejeté, jamais persisté). Réutilise la même table
+que SEC-10 (forme de résultat inchangée) ; `extraction_method`
+distingue laquelle des deux méthodes a produit une ligne donnée.
+
+Chemin LLM strictement opt-in dans `run_sec_collection.py`
+(`--use-llm-extraction`) : chaque appel a un coût API réel, jamais
+déclenché par défaut. Migration additive, non destructive — mêmes
+règles de non-backfill que les migrations 013/016.
 
 ---
 
