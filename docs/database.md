@@ -149,6 +149,7 @@ Fichiers actuels :
 016_add_match_reason_to_sec_8k_warrant_exhibit.sql
 017_add_extraction_method_to_sec_8k_warrant_text_extraction.sql
 018_create_market_data_schema.sql
+019_add_market_bar_1m_core_richer_schema.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -523,6 +524,60 @@ Chemin LLM strictement opt-in dans `run_sec_collection.py`
 (`--use-llm-extraction`) : chaque appel a un coût API réel, jamais
 déclenché par défaut. Migration additive, non destructive — mêmes
 règles de non-backfill que les migrations 013/016.
+
+### 5.21 Migration 019
+
+`019_add_market_bar_1m_core_richer_schema.sql` enrichit `core.market_bar_1m`
+(BT-16) en vue de l'intégration d'un vrai fournisseur (Massive, BT-11) — voir
+`docs/backtesting/BACKTESTING_COMPONENT.md`, « Initial logical data model »,
+et `docs/backtesting/BACKTESTING_GITHUB_BACKLOG.md#bt-16`. La migration 018
+n'est pas modifiée rétroactivement ; toutes les nouvelles colonnes sont
+nullable, donc l'insertion RAW→CORE existante (BT-01,
+`collectors/market_data/src/market_data_postgresql.py`) continue de
+fonctionner sans changement.
+
+`raw.market_bar_1m` n'est volontairement pas touchée : elle reste une
+capture par source fidèle à l'octet près (`ticker`/`market`/`bar_start`/
+OHLCV/`source` seulement). Les champs plus riches et indépendants du
+fournisseur ci-dessous appartiennent à CORE, conformément au principe de la
+table canonique du projet (« la table canonique porte la métadonnée de
+provenance mais jamais la logique métier propre à un fournisseur »).
+
+Colonnes ajoutées à `core.market_bar_1m` :
+
+```text
+security_id          -- nullable, pas encore de FK (core.security n'existe
+                         pas avant CS-07) ; reste vide jusqu'au backfill,
+                         ticker reste l'identifiant de travail d'ici là
+market_scope         -- ex. 'CONSOLIDATED_US' pour les données SIP
+session              -- pre-market / regular / after-hours, calculée à
+                         l'ingestion via
+                         shared/calendar/trading_calendar.get_session_bounds()
+transaction_count    -- optionnel, quand la source le fournit
+source_provider      -- ex. 'MASSIVE'
+source_dataset       -- ex. 'us_stocks_sip/minute_aggs_v1'
+dataset_version
+ingestion_run_id
+```
+
+`market` (code de marché lettré) devient nullable sur CORE uniquement : les
+chandelles consolidées SIP (Massive `minute_aggs_v1`) n'ont pas de marché
+unique par chandelle ; `market_scope` devient le concept de remplacement.
+`market` est conservé plutôt que supprimé — pas de réécriture rétroactive
+d'une migration déjà appliquée.
+
+**Point ouvert connu pour BT-11 :** `uq_market_bar_1m_core_natural_key` reste
+`(ticker, market, bar_start)`. PostgreSQL traite les `NULL` comme distincts
+pour une contrainte d'unicité, donc une fois `market` à `NULL` pour toutes
+les lignes issues du SIP, cette contrainte ne prévient plus les doublons de
+chandelle canonique pour un même `(ticker, bar_start)`. BT-11 doit résoudre
+ce point explicitement (nouvelle clé naturelle `(ticker, bar_start)`, ou
+index unique partiel) avant de s'appuyer sur `ON CONFLICT` pour
+l'idempotence — ce n'est pas hérité silencieusement de cette migration
+schéma seule.
+
+Réutilise le même verrou QuantLab que la migration 018, sans nouveau
+`objid` : `(716203, 10)`.
 
 ---
 
