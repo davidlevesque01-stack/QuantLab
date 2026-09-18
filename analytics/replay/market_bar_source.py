@@ -68,10 +68,15 @@ class MarketBarSource:
                 "ticker": row[0],
                 "market": row[1],
                 "bar_start": row[2],
-                "open": row[3],
-                "high": row[4],
-                "low": row[5],
-                "close": row[6],
+                # open/high/low/close are NUMERIC in PostgreSQL -- psycopg
+                # returns Decimal. Cast to float so this matches
+                # QuantLabAdapter.fetch_bars()'s canonical shape (BT-01)
+                # exactly; downstream code must not care which path a bar
+                # came from.
+                "open": float(row[3]),
+                "high": float(row[4]),
+                "low": float(row[5]),
+                "close": float(row[6]),
                 "volume": row[7],
             }
             for row in rows
