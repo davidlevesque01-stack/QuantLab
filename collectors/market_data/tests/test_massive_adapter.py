@@ -140,6 +140,35 @@ def test_out_of_session_row_is_skipped_not_raised(tmp_path):
     assert bars[0]["volume"] == 200
 
 
+def test_fractional_volume_and_transactions_are_rounded_to_int(tmp_path):
+    # Real Massive data reports fractional volume/transactions (e.g.
+    # "32467.154770") despite the docs describing them as plain integers --
+    # discovered against a real flat file. volume/transaction_count are
+    # BIGINT/INTEGER columns, so these must be rounded, not truncated blindly.
+    _write_gz_csv(
+        tmp_path / "source.csv.gz",
+        [
+            {
+                "ticker": "GPUS",
+                "volume": "32467.154770",
+                "open": 1.0,
+                "close": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "window_start": 1_786_716_000_000_000_000,
+                "transactions": "12.6",
+            },
+        ],
+    )
+
+    fake_client = FakeS3Client(tmp_path / "source.csv.gz")
+    adapter = MassiveAdapter(tmp_path, s3_client=fake_client)
+
+    bars = adapter.fetch_bars("GPUS", TRADING_DAY)
+
+    assert bars[0]["volume"] == 32467
+
+
 def test_row_with_mismatched_trading_day_is_skipped(tmp_path):
     _write_gz_csv(
         tmp_path / "source.csv.gz",
