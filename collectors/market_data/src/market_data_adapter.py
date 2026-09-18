@@ -21,7 +21,9 @@ class QuantLabAdapter(Protocol):
 
             {
                 "ticker": str,
-                "market": str,
+                "market": str | None,  # None for SIP-consolidated providers
+                                        # with no single venue per bar (e.g.
+                                        # Massive, BT-11)
                 "bar_start": datetime,  # naive, Nasdaq-local wall-clock time
                 "open": float,
                 "high": float,
