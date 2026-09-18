@@ -945,3 +945,20 @@ Duplicate source observations : 1 016
 The static rerun is idempotent. PostgreSQL non-regression checks pass, the normal V1.3.1 CSV loader was validated under `ROLLBACK`, the GPUS integration test passes, the analytics suite passes 69/69 tests, and the complete suite passes 70/70 tests.
 
 Known historical limitation: some legacy CORE episodes may retain a final action/resumption code such as `T3` in `reason_code`. V1.3 preserves these episodes. An analytical `ALL` selection therefore means no `reason_code` filter and includes all qualifying CORE episodes.
+
+---
+
+## 25. External Data Providers
+
+`docs/data_sources.md` is the authoritative cross-cutting registry of which
+external provider serves which QuantLab need (market data, HALTs, SEC filings,
+capital-structure/dilution metrics, news) and its current status. Component docs
+(`docs/backtesting/BACKTESTING_COMPONENT.md`,
+`collectors/warrants/docs/WARRANTS_COMPONENT.md`) carry the decision narrative;
+`docs/data_sources.md` is kept current, not historical.
+
+As of this revision: Massive (formerly Polygon.io, US Stocks SIP) is the primary
+consolidated intraday market-data provider for the backtesting component, and
+DilutionWatch is the primary secondary source for capital-structure aggregate
+metrics, replacing an earlier DilutionTracker integration plan that turned out to
+be infeasible (no API, Terms of Service ban all automated access).
