@@ -150,6 +150,7 @@ Fichiers actuels :
 017_add_extraction_method_to_sec_8k_warrant_text_extraction.sql
 018_create_market_data_schema.sql
 019_add_market_bar_1m_core_richer_schema.sql
+020_add_market_bar_1m_null_market_partial_unique_indexes.sql
 ```
 
 ### 5.1 Anomalie historique de numérotation
@@ -578,6 +579,47 @@ schéma seule.
 
 Réutilise le même verrou QuantLab que la migration 018, sans nouveau
 `objid` : `(716203, 10)`.
+
+### 5.22 Migration 020
+
+`020_add_market_bar_1m_null_market_partial_unique_indexes.sql` résout le
+point ouvert signalé par la migration 019 (BT-11) : `market` devient `NULL`
+pour toutes les lignes SIP-consolidées (Massive `minute_aggs_v1`), et
+PostgreSQL traite chaque `NULL` comme distinct pour l'unicité — les
+contraintes existantes `uq_market_bar_1m_raw_natural_key`
+(`ticker, market, bar_start, source`) et `uq_market_bar_1m_core_natural_key`
+(`ticker, market, bar_start`) ne dédoublonnent donc plus rien pour ces
+lignes, et `ON CONFLICT` ne s'y déclenche jamais lors d'une réexécution.
+
+`raw.market_bar_1m.market` a le même problème latent que CORE l'avait avant
+019 : sa colonne `market` était encore `NOT NULL`. Plutôt que d'inventer une
+valeur de marché fictive pour les lignes Massive (ce qui violerait le
+principe « RAW = capture fidèle à l'octet près »), cette migration rend
+`raw.market_bar_1m.market` nullable aussi, exactement comme 019 l'a fait
+pour CORE.
+
+Deux nouveaux index uniques **partiels** sont ajoutés (les contraintes
+d'origine restent intactes pour les lignes où `market` est renseigné,
+CSVAdapter/BT-01) :
+
+```text
+uq_market_bar_1m_raw_null_market_natural_key
+    ON raw.market_bar_1m (ticker, bar_start, source) WHERE market IS NULL
+
+uq_market_bar_1m_core_null_market_natural_key
+    ON core.market_bar_1m (ticker, bar_start) WHERE market IS NULL
+```
+
+Côté Python, `collectors/market_data/src/market_data_postgresql.py` (BT-11)
+partitionne chaque lot de chandelles en deux groupes (`market` renseigné /
+`market` `NULL`) et exécute deux `INSERT ... ON CONFLICT` séparés par lot,
+chacun ciblant l'index correspondant — PostgreSQL exige que la clause
+`ON CONFLICT` corresponde exactement à un seul index, et le prédicat d'un
+index partiel doit être répété dans la clause `ON CONFLICT ... WHERE ...`
+pour que l'arbitrage fonctionne.
+
+Migration additive, non destructive — mêmes règles de non-backfill que les
+migrations 013/016/019. Aucun nouveau verrou : réutilise `(716203, 10)`.
 
 ---
 

@@ -19,6 +19,11 @@ AFTER_HOURS_CLOSE = time(20, 0)
 NASDAQ_TZ = ZoneInfo("America/New_York")
 
 
+SESSION_PRE_MARKET = "PRE_MARKET"
+SESSION_REGULAR = "REGULAR"
+SESSION_AFTER_HOURS = "AFTER_HOURS"
+
+
 @dataclass(frozen=True)
 class SessionBounds:
     pre_market_open: time
@@ -39,6 +44,44 @@ def localize(naive_dt: datetime) -> datetime:
         raise ValueError("localize() expects a naive datetime (no tzinfo)")
 
     return naive_dt.replace(tzinfo=NASDAQ_TZ)
+
+
+def to_nasdaq_local(aware_dt: datetime) -> datetime:
+    """Convert a tz-aware datetime (e.g. a provider's UTC timestamp) to a
+    naive Nasdaq-local wall-clock timestamp. Symmetric counterpart to
+    localize().
+
+    Raises ValueError if `aware_dt` is naive -- a provider timestamp must be
+    unambiguous before this conversion.
+    """
+
+    if aware_dt.tzinfo is None:
+        raise ValueError("to_nasdaq_local() expects a tz-aware datetime")
+
+    return aware_dt.astimezone(NASDAQ_TZ).replace(tzinfo=None)
+
+
+def classify_session(local_dt: datetime, bounds: SessionBounds) -> str:
+    """Classify a naive Nasdaq-local bar timestamp into PRE_MARKET/REGULAR/
+    AFTER_HOURS using `bounds` from get_session_bounds().
+
+    Raises ValueError if `local_dt`'s time-of-day falls outside
+    [pre_market_open, after_hours_close) -- callers decide whether to skip
+    such a bar or treat it as a data-quality problem.
+    """
+
+    t = local_dt.time()
+
+    if bounds.pre_market_open <= t < bounds.regular_open:
+        return SESSION_PRE_MARKET
+
+    if bounds.regular_open <= t < bounds.regular_close:
+        return SESSION_REGULAR
+
+    if bounds.regular_close <= t < bounds.after_hours_close:
+        return SESSION_AFTER_HOURS
+
+    raise ValueError(f"{local_dt} is outside the Nasdaq session window")
 
 
 def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:

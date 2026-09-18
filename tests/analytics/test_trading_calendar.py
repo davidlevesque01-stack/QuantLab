@@ -10,11 +10,16 @@ from shared.calendar.trading_calendar import (
     NORMAL_CLOSE,
     PRE_MARKET_OPEN,
     REGULAR_OPEN,
+    SESSION_AFTER_HOURS,
+    SESSION_PRE_MARKET,
+    SESSION_REGULAR,
+    classify_session,
     get_session_bounds,
     get_session_close,
     get_trading_days,
     is_trading_day,
     localize,
+    to_nasdaq_local,
 )
 
 
@@ -115,3 +120,47 @@ def test_localize_rejects_already_aware_datetime():
 
     with pytest.raises(ValueError):
         localize(aware)
+
+
+def test_to_nasdaq_local_rejects_naive_datetime():
+    naive = datetime(2026, 8, 14, 10, 17, 0)
+
+    with pytest.raises(ValueError):
+        to_nasdaq_local(naive)
+
+
+def test_to_nasdaq_local_round_trips_with_localize_summer():
+    # EDT (UTC-4) -- 2026-08-14 is in daylight saving time.
+    naive = datetime(2026, 8, 14, 10, 17, 0)
+    aware_utc = localize(naive).astimezone(ZoneInfo("UTC"))
+
+    assert to_nasdaq_local(aware_utc) == naive
+
+
+def test_to_nasdaq_local_round_trips_with_localize_winter():
+    # EST (UTC-5) -- 2026-01-14 is outside daylight saving time.
+    naive = datetime(2026, 1, 14, 10, 17, 0)
+    aware_utc = localize(naive).astimezone(ZoneInfo("UTC"))
+
+    assert to_nasdaq_local(aware_utc) == naive
+
+
+def test_classify_session_boundaries():
+    bounds = get_session_bounds(date(2026, 7, 6))
+
+    assert classify_session(datetime(2026, 7, 6, 4, 0), bounds) == SESSION_PRE_MARKET
+    assert classify_session(datetime(2026, 7, 6, 9, 29), bounds) == SESSION_PRE_MARKET
+    assert classify_session(datetime(2026, 7, 6, 9, 30), bounds) == SESSION_REGULAR
+    assert classify_session(datetime(2026, 7, 6, 15, 59), bounds) == SESSION_REGULAR
+    assert classify_session(datetime(2026, 7, 6, 16, 0), bounds) == SESSION_AFTER_HOURS
+    assert classify_session(datetime(2026, 7, 6, 19, 59), bounds) == SESSION_AFTER_HOURS
+
+
+def test_classify_session_raises_outside_window():
+    bounds = get_session_bounds(date(2026, 7, 6))
+
+    with pytest.raises(ValueError):
+        classify_session(datetime(2026, 7, 6, 3, 59), bounds)
+
+    with pytest.raises(ValueError):
+        classify_session(datetime(2026, 7, 6, 20, 0), bounds)
