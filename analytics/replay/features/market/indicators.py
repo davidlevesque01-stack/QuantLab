@@ -14,12 +14,13 @@ fake `MarketContext` in tests without needing a live database.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from analytics.replay.aggregation import DAILY_MINUTES, aggregate_bars
 from analytics.replay.market_bar_source import MarketBarSource
 from analytics.replay.market_context import MarketContext
+from shared.calendar.trading_calendar import is_trading_day
 
 
 _TIMEFRAME_MINUTES = {
@@ -70,36 +71,67 @@ def calculate_vwap_from_bars(bars: list[dict[str, Any]]) -> float | None:
     return weighted_sum / total_volume
 
 
+def _preceding_trading_days(day: date, count: int) -> list[date]:
+    days: list[date] = []
+    cursor = day - timedelta(days=1)
+
+    while len(days) < count:
+        if is_trading_day(cursor):
+            days.append(cursor)
+        cursor -= timedelta(days=1)
+
+    return days
+
+
 def calculate_rvol_from_bars(
     bars: list[dict[str, Any]],
     timeframe_minutes: int,
     *,
-    lookback: int = 5,
+    historical_bars: list[list[dict[str, Any]]],
 ) -> float | None:
-    """Relative Volume: the most recent `timeframe_minutes` bucket's volume
-    divided by the average volume of the `lookback` buckets preceding it.
+    """Relative Volume: the current `timeframe_minutes` bucket's volume
+    divided by the average volume of the same time-of-day bucket across
+    `historical_bars` -- the conventional RVOL definition (today's 09:30-
+    09:35 volume vs. the average 09:30-09:35 volume of the preceding N
+    trading days), not a same-day local comparison.
 
-    Deliberate MVP simplification: this compares a bucket to its own recent
-    local history, not to a same-time-of-day average across prior trading
-    days (the conventional RVOL definition) -- that needs a multi-day
-    historical baseline this component does not have yet with only a single
-    fixture day to validate against. Revisit once enough real Massive
-    history is ingested (BT-11) to compute a genuine trailing-day baseline.
+    `historical_bars` is one full day of 1-minute bars per preceding
+    trading day (each day's bars, unfiltered -- an entire past trading day
+    is always fully visible under the point-in-time guard, see
+    MarketContext.fetch_bars). A historical day missing a bucket at the
+    matching time-of-day (e.g. a partial trading day) is simply skipped
+    rather than treated as zero volume.
 
-    Returns None if there are fewer than `lookback + 1` buckets (not enough
-    history to compare against), or the preceding buckets' average volume
-    is zero.
+    The current bucket may still be in progress (fewer minutes than a full
+    bucket) if `bars` only extends to `as_of` mid-bucket -- this compares
+    that partial volume to the *full* historical buckets, which is a known
+    MVP limitation (no time-of-day-adjusted partial-bucket baseline yet).
+
+    Returns None if `bars` is empty (no current bucket), if none of
+    `historical_bars`' days have a bucket at the matching time-of-day, or
+    if the resulting average baseline volume is zero.
     """
 
-    buckets = aggregate_bars(bars, timeframe_minutes)
+    current_buckets = aggregate_bars(bars, timeframe_minutes)
 
-    if len(buckets) < lookback + 1:
+    if not current_buckets:
         return None
 
-    current = buckets[-1]
-    preceding = buckets[-(lookback + 1) : -1]
+    current = current_buckets[-1]
+    target_time = current.bucket_start.time()
 
-    average_volume = sum(b.volume for b in preceding) / len(preceding)
+    matching_volumes = []
+
+    for day_bars in historical_bars:
+        for bucket in aggregate_bars(day_bars, timeframe_minutes):
+            if bucket.bucket_start.time() == target_time:
+                matching_volumes.append(bucket.volume)
+                break
+
+    if not matching_volumes:
+        return None
+
+    average_volume = sum(matching_volumes) / len(matching_volumes)
 
     if average_volume == 0:
         return None
@@ -138,4 +170,11 @@ def calculate_rvol(
     bars = context.fetch_bars(ticker=ticker, trading_day=as_of.date())
     timeframe_minutes = parse_timeframe_minutes(timeframe)
 
-    return calculate_rvol_from_bars(bars, timeframe_minutes, lookback=lookback)
+    historical_bars = [
+        context.fetch_bars(ticker=ticker, trading_day=day)
+        for day in _preceding_trading_days(as_of.date(), lookback)
+    ]
+
+    return calculate_rvol_from_bars(
+        bars, timeframe_minutes, historical_bars=historical_bars
+    )
