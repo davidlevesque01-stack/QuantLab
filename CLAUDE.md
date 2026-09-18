@@ -46,3 +46,8 @@ Patron à trois couches partagé par chaque collecteur : **RAW → CORE → anal
 - **Piège BOM Windows/PowerShell 5.1** : `Set-Content -Encoding utf8` sous PowerShell 5.1 écrit un BOM, ce qui casse l'exécution de fichiers `.sql` par `psql`. Lors de la génération d'un fichier (notamment les migrations SQL) via PowerShell sur cette machine, l'écrire sans BOM (ex. via `New-Object System.Text.UTF8Encoding($false)`).
 - **`docs/database.md` est rédigé en français** — conserver le français en l'éditant ; les autres docs (`architecture.md`, `installation.md`, `collaborator_installation.md`, les README) sont en anglais.
 - **Périmètre du système de fichiers** : ne jamais lire, écrire ou exécuter de commande en dehors de `C:\QuantLab\QuantLab` sans permission explicite de l'utilisateur au préalable.
+
+### Règles de collaboration (immuables)
+
+- **Toute modification de base de données est manuelle, faite par l'utilisateur** : Claude ne se connecte jamais lui-même à PostgreSQL pour exécuter du DDL/DML (migrations, correctifs de données, etc.), même avec les variables `QUANTLAB_DB_*` disponibles dans l'environnement. Claude fournit le code SQL/`psql` prêt à exécuter ; l'utilisateur l'exécute lui-même et fournit la sortie en retour à Claude pour la suite du travail.
+- **Synthèse continue** : Claude doit fournir une courte synthèse de son état d'avancement, de ses découvertes et de ses décisions au fil du travail — pas seulement en conclusion. Particulièrement avant/pendant toute action non triviale (changement d'approche, découverte inattendue comme du travail déjà en cours, décision de conception).
