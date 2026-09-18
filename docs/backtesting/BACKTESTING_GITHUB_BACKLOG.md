@@ -12,6 +12,27 @@ schema migration (BT-16) plus a Source Adapter / Historical Data API layering
 correction (BT-17) before BT-11 can land cleanly. BT-01 through BT-10 are otherwise
 unaffected — the fixture/CSV path stays the primary path for automated tests.
 
+**Revision note (MVP skeleton, 2026-09-18):** there is no market data in
+PostgreSQL yet outside the BT-01 fixture, and the user will have a Massive
+account/API key the same day this note was written. Priority shifts to the
+shortest real path from ingestion to an on-screen chart, deferring aggregation,
+features, models and capital-structure integration until that skeleton renders:
+
+```text
+BT-16 (schema) -> BT-11 (real MassiveAdapter) -> BT-17 (Historical Data API)
+    -> BT-03 (Simulated Clock/MarketContext) -> BT-05 (Replay Engine, trimmed)
+    -> BT-06a (bare candlestick+volume viewer)
+```
+
+`BT-16`'s `security_id` becomes **nullable** for this pass specifically so it
+does not block on `core.security`/CS-07 (capital-structure schema) — that
+coordination still happens, just not on this skeleton's critical path. `BT-06`
+is split into `BT-06a` (bare chart, no feature panel — part of the skeleton) and
+`BT-06b` (feature panel, after BT-04). `BT-05` is trimmed for this pass to
+clock -> context -> raw bars only, deferring the aggregation/feature steps in its
+own loop to a follow-up once the skeleton renders. BT-02/BT-04/BT-06b/CS-07 and
+everything capital-structure move after the skeleton, not before it.
+
 ## BT-00 — Backtesting foundations
 
 **Goal:** Put the cross-cutting prerequisites in place before any replay code is written.
@@ -82,9 +103,12 @@ to be reverted, only extended.
   timestamps for the GPUS fixture.
 - Values recomputed at each simulated minute match the golden dataset exactly.
 
-## BT-05 — Replay Engine, interactive mode (no viewer, no model yet)
+## BT-05 — Replay Engine, interactive mode (trimmed for the MVP skeleton)
 
-**Goal:** Orchestrate clock -> context -> aggregation -> features end-to-end on the fixture.
+**Goal:** Orchestrate clock -> context -> raw bars end-to-end on real Massive
+data. Aggregation and features are deliberately deferred to a follow-up pass
+once BT-06a renders — this ticket's scope is trimmed, not its design: the loop
+must still be shaped so BT-02/BT-04 slot in later without rework.
 
 **Acceptance criteria**
 - Single `ReplayEngine` class in `analytics/replay/` drives the full loop for one
@@ -92,18 +116,34 @@ to be reverted, only extended.
 - Designed so Interactive Replay and Batch Replay (BT-09) reuse it unchanged.
 - Reads market bars through the Historical Data API (BT-17's `MarketBarSource`),
   never through a Source Adapter directly.
+- No aggregation/feature step in this pass — raw 1-minute bars only, exposed in
+  a shape BT-02/BT-04 can slot into later without changing `ReplayEngine`'s
+  public interface.
 
-## BT-06 — Minimal viewer (`ui/replay/`)
+## BT-06a — Minimal viewer skeleton: candlestick + volume, no features
 
-**Goal:** Visually replay the GPUS fixture minute by minute.
+**Goal:** Prove the full pipe (Massive -> RAW -> CORE -> Replay -> screen)
+renders real data, before any indicator/model work. This is the MVP skeleton's
+finish line.
 
 **Acceptance criteria**
-- `ui/replay/` built with `pyqtgraph`, following the `AnalysisService` instantiation
-  pattern from `ui/nasdaq_halts/main_window.py`.
-- Candlestick + volume + feature panel, with PLAY/PAUSE/+1min/-1min/timeline
-  controls driving the `SimulatedClock`.
-- Manually verified by actually running the app and replaying GPUS 2026-08-14 —
-  automated tests alone do not certify this ticket.
+- `ui/replay/` built with `pyqtgraph`, following the `AnalysisService`
+  instantiation pattern from `ui/nasdaq_halts/main_window.py`.
+- Candlestick + volume only — no feature panel (that's BT-06b), no timeframe
+  picker (that needs BT-02, not in this pass).
+- PLAY/PAUSE/+1min/-1min/timeline controls driving the `SimulatedClock`.
+- Manually verified against a real ticker/day ingested via BT-11 (Massive),
+  not the BT-01 fixture — automated tests alone do not certify this ticket.
+
+## BT-06b — Viewer feature panel (VWAP/RVOL)
+
+**Goal:** Add BT-04's indicators to the BT-06a skeleton once it renders.
+
+**Acceptance criteria**
+- Feature panel added to `ui/replay/` showing VWAP/RVOL from BT-04.
+- Timeframe picker ([1M][2M][5M]...) added once BT-02's Aggregation Engine
+  is available.
+- Manually verified the same way as BT-06a.
 
 ## BT-07 — Model Engine + prediction persistence
 
@@ -187,11 +227,13 @@ touching the already-applied migration 018.
 - New migration numbered from whatever is next-free at implementation time; `018`
   is never edited retroactively.
 - `market` (venue letter code) becomes nullable/optional rather than removed.
-- `security_id` is a real FK into `core.security`, coordinated with the
-  capital-structure component (see
-  `collectors/warrants/docs/WARRANTS_COMPONENT.md`) rather than invented twice —
-  `core.security` itself may need to be created first if it doesn't exist yet by
-  the time this ticket starts.
+- `security_id` is added as a **nullable** FK into `core.security` — deliberately
+  not blocking on CS-07 for the MVP skeleton pass. It stays unpopulated until
+  `core.security` exists and a backfill is done; `ticker` (already present)
+  remains the working identifier until then. Coordinate the eventual FK
+  shape with the capital-structure component
+  (`collectors/warrants/docs/WARRANTS_COMPONENT.md`) rather than inventing it
+  twice, but do not let that coordination block this ticket.
 - `session` computed at ingestion from `shared/calendar/trading_calendar.get_session_bounds()`.
 
 ## BT-17 — Historical Data API (`MarketBarSource`), separated from the Source Adapter
